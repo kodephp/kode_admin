@@ -1,0 +1,52 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * 骨架入口薄壳：转发至 vendor/kode/framework 的 CLI 唯一实现。
+ *
+ * 本文件只做定位 + 转发，不含业务逻辑——框架 `composer update` 后新命令
+ * （start/status/…）自动生效，无需重建项目；切勿在此复制第二份实现。
+ *
+ * 同时声明项目根，供被转发的框架 CLI 定位 .env / storage（否则转发后框架
+ * 按自身 __DIR__ 会把 init 产物写进 vendor/kode/framework 目录）。
+ */
+if (!defined('KODE_PROJECT_ROOT')) {
+    define('KODE_PROJECT_ROOT', __DIR__);
+}
+$root = __DIR__;
+$candidates = [
+    $root . '/vendor/kode/framework/kode',
+    $root . '/vendor/kode/framework/bin/kode',
+];
+foreach ($candidates as $fwBin) {
+    if (is_file($fwBin) && !self_is($fwBin)) {
+        require $fwBin;
+        exit(0);
+    }
+}
+
+fwrite(STDERR, "无法定位框架 CLI（vendor/kode/framework 未安装），请先执行 composer install。\n");
+exit(1);
+
+/**
+ * 判断 $target 是否就是本入口文件自身（防「框架仓库直接跑自己的 kode」无限递归）。
+ *
+ * 必须 phar 感知：realpath() 对 phar:// 流一律返回 false（PHP 不支持在 phar 上
+ * 解析真实路径），打包产物里 realpath($fwBin) 与 realpath(__FILE__) 都是 false，
+ * 旧的 `realpath() !== realpath()` 比较会退化成 `false !== false` = false，
+ * 导致骨架永远找不到框架 CLI、直接报「vendor 未安装」而退出。
+ * 因此：两边都解析不出来时改用字符串比较兜底（同一文件 → 字符串恒等）。
+ */
+function self_is(string $target): bool
+{
+    $a = realpath($target);
+    $b = realpath(__FILE__);
+
+    if ($a === false || $b === false) {
+        return $target === __FILE__;
+    }
+
+    return $a === $b;
+}

@@ -1,0 +1,47 @@
+# 镜像档只 COPY build/kode.phar（见 Dockerfile），其余一律不进构建上下文。
+# 这份清单同时防止误把密钥 / 运行时数据 / 依赖树上传到 Docker daemon。
+
+# 运行时数据与密钥（绝不进镜像）
+.env
+.env.local
+.env.*.local
+storage/
+var/
+build/kode.bin
+
+# 依赖树与源码（镜像内不需要，phar 已内含）
+vendor/
+node_modules/
+app/
+config/
+database/
+lang/
+plugins/
+public/
+tests/
+docs/
+deploy/
+
+# 工具 / IDE / 缓存
+.git/
+.gitignore
+.gitattributes
+.workbuddy/
+.phpunit.cache/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+
+# 文档与脚本
+CHANGELOG.md
+README.md
+README-ADMIN.md
+AGENTS.md
+LICENSE
+docker-compose.yml
+docker-compose.yaml
+phpunit.xml
+phpunit.xml.dist

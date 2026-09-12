@@ -1,0 +1,53 @@
+{
+    "name": "kode/skeleton",
+    "description": "Kode Framework Skeleton —— composer create-project 后自动生成 app/config 等骨架",
+    "type": "project",
+    "keywords": ["kode", "skeleton", "hyperf", "webman"],
+    "license": "MIT",
+    "version": "1.5.0",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/kodephp/framework.git"
+        }
+    ],
+    "require": {
+        "php": ">=8.3",
+        "doctrine/orm": "^3.6",
+        "hashids/hashids": "^5.0",
+        "kode/framework": "^1.3",
+        "monolog/monolog": "^3.0",
+        "nyholm/psr7": "^1.8",
+        "symfony/cache": "^7.4",
+        "symfony/translation": "^7.0",
+        "symfony/validator": "^7.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "app\\": "app/",
+            "Kode\\Plugins\\": "plugins/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "app\\tests\\": "tests/"
+        }
+    },
+    "bin": ["kode"],
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true,
+        "allow-plugins": {"*": true}
+    },
+    "scripts": {
+        "post-create-project-cmd": "php kode init",
+        "start": "php kode start",
+        "serve": "php kode start",
+        "test": "php vendor/bin/phpunit"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

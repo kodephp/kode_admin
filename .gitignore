@@ -1,0 +1,111 @@
+# ───────────────────────────────────────────────────────────
+# Kode Framework —— .gitignore
+# 覆盖：依赖 / 密钥 / 运行时产物 / 各类 IDE·编辑器 / OS 文件 / 工具缓存
+# ───────────────────────────────────────────────────────────
+
+# ── 依赖（Composer 安装产物） ──
+/vendor/
+composer.lock
+
+# ── 压测对等框架（benchmarks/peers/* 隔离安装的 vendor，非框架依赖） ──
+/benchmarks/peers/*/vendor/
+
+# ── 环境变量与密钥（本地开发，禁止提交） ──
+.env
+.env.*
+!.env.example
+
+# ── 运行时目录（缓存 / 日志 / 会话，本地生成） ──
+/storage/cache/*
+/storage/logs/*
+/storage/sessions/*
+/storage/framework/cache/*
+!storage/cache/.gitkeep
+!storage/logs/.gitkeep
+!storage/sessions/.gitkeep
+!storage/framework/cache/.gitkeep
+
+# ── 进程临时目录（pid / sockets / 热重载产物） ──
+/.runtime/
+/var/
+/app/var/
+
+# ── 运行时 worker 状态与上传产物 ──
+/storage/runtime/
+/storage/uploads/
+/storage/bench.sqlite
+/runtime/
+*.pid
+
+# ── 本地开发 / 调试产物 ──
+*.log
+.phpunit.result.cache
+.phpunit.cache/
+/build/
+/coverage/
+/.cache/
+.cache/
+
+# ── IDE / 编辑器（JetBrains 全家桶 / VS Code / 其他） ──
+/.idea
+/.vscode
+*.iml
+*.swp
+*.swo
+*.swn
+*.swx
+*.bak
+*.tmp
+*.temp
+*~
+
+# PhpStorm / IntelliJ 辅助产物
+/.phpstorm.meta.php
+/_ide_helper.php
+/_ide_helper_models.php
+/.phpunit.xml.bak
+
+# NetBeans / Eclipse / Sublime / Atom / Vim
+/nbproject/
+/.buildpath
+/.project
+/.settings/
+/.externalToolBuilders/
+/.sublime-project
+/.sublime-workspace
+/.atom/
+*.sublime-workspace
+*~
+.vim/
+*.swp
+
+# ── 静态分析 / 代码风格 / 格式化工具缓存 ──
+/.php-cs-fixer.cache
+/.php-cs-fixer.php
+/phpstan.neon.cache
+/.psalm/
+/.phpstorm.meta.php
+/scoped-code/
+/.scoper/
+
+# ── OS 生成的文件 ──
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.AppleDouble
+.LSOverride
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.directory
+
+# ── 助手私有记忆（非框架代码） ──
+/.workbuddy
+/.trae
+
+# ── 本地测试（默认忽略，按需放开注释保留） ──
+# /tests

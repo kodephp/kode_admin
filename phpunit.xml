@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnWarning="false"
+         failOnNotice="false">
+    <testsuites>
+        <testsuite name="Kode Skeleton Test Suite">
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <!-- 测试用 /metrics 令牌（protect=token）。config 为进程级单例，只能于首次 boot 前注入。 -->
+        <env name="OBS_METRICS_PROTECT" value="token"/>
+        <env name="OBS_METRICS_TOKEN" value="test-token"/>
+
+        <!-- 测试用 JWT 密钥。v1.0.0 起框架不再内置明文兜底密钥（公开默认值等于任何人可自签），
+             缺密钥会在 JwtGuard 构造期即抛异常。仓库不含 .env（密钥禁止入库），故在此注入。 -->
+        <env name="JWT_SECRET" value="kode-skeleton-test-secret-0123456789abcdef"/>
+
+        <!-- 骨架版本（与 composer.json 的 version 字段、git tag 同步；见 tests/SkeletonSmokeTest）。 -->
+        <env name="APP_VERSION" value="1.5.0"/>
+
+        <!-- 多租户存储隔离集成测试固定配置（首次 boot 前注入；未带 X-Tenant-Id 的请求零开销放行）。 -->
+        <env name="TENANT_ENABLED" value="true"/>
+        <env name="TENANT_RESOLVER" value="header"/>
+        <env name="TENANT_STORAGE_ENABLED" value="true"/>
+        <env name="TENANT_STORAGE_STRATEGY" value="database"/>
+        <env name="TENANT_STORAGE_TEMPLATE" value="mysql"/>
+        <env name="TENANT_DB_PREFIX" value="tnt_"/>
+        <env name="TENANT_STORAGE_ON_MISSING" value="fallback"/>
+
+        <!-- 健康检查集成测试：测试环境通常无可达 MySQL，关闭 db 探针避免就绪检查误报 503。 -->
+        <env name="HEALTH_CHECK_DB" value="false"/>
+
+        <!-- 框架默认改为「按需开启（opt-in）」：以下跨切面能力 config 默认值已翻转为 false。
+             测试环境统一显式开启，使既有「能力启用」类测试维持绿；框架真实默认仍为零开销。 -->
+        <env name="CORS_ENABLED" value="true"/>
+        <env name="CSRF_ENABLED" value="true"/>
+        <env name="LIMITING_ENABLED" value="true"/>
+        <env name="SECURITY_HEADERS_ENABLED" value="true"/>
+        <env name="SECURITY_REQUEST_ID" value="true"/>
+        <env name="OBS_METRICS_ENABLED" value="true"/>
+        <!-- 测试环境全采样，使直方图 TYPE 行稳定出现（生产默认 0.1，避免每请求 HDR 开销） -->
+        <env name="OBS_METRICS_SAMPLE_RATIO" value="1.0"/>
+        <env name="OBS_TRACING_ENABLED" value="true"/>
+        <env name="BREAKER_HTTP_ENABLED" value="true"/>
+        <env name="RETRY_HTTP_ENABLED" value="true"/>
+        <env name="IDEMPOTENCY_HTTP_ENABLED" value="true"/>
+        <env name="SESSION_ENABLED" value="true"/>
+        <env name="FEATURE_ENABLED" value="true"/>
+        <env name="LOCALE_ENABLED" value="true"/>
+        <env name="ACCESS_LOG_ENABLED" value="true"/>
+    </php>
+</phpunit>

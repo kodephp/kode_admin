@@ -1,0 +1,124 @@
+# Kode Framework — K8s 生产级部署清单（12-factor / 零停机）
+# 依赖：镜像由根 Dockerfile 构建并推送至 registry；Secret 需预创建
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kode-app-secret
+type: Opaque
+stringData:
+  # 生产务必替换为强随机值（bin2hex(random_bytes(32))）——不要沿用占位符
+  JWT_SECRET: "__CHANGE_ME__"
+  DB_PASSWORD: "__CHANGE_ME__"
+  REDIS_PASSWORD: ""
+  OBS_METRICS_TOKEN: "__CHANGE_ME__"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kode-app
+  labels:
+    app: kode-app
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: kode-app
+  template:
+    metadata:
+      labels:
+        app: kode-app
+    spec:
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: app
+          image: kode-app:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9527
+              name: http
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: APP_DEBUG
+              value: "false"
+            - name: SERVER_HOST
+              value: "0.0.0.0"
+            - name: SERVER_PORT
+              value: "9527"
+            - name: SERVER_GRACE_PERIOD
+              value: "30"
+            - name: K8S_TERMINATION_GRACE_PERIOD
+              value: "40"
+            - name: SECURITY_HEADERS_ENABLED
+              value: "true"
+            - name: SESSION_SECURE
+              value: "true"
+            - name: LOG_FORMAT
+              value: "json"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kode-app-secret
+                  key: JWT_SECRET
+            - name: OBS_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kode-app-secret
+                  key: OBS_METRICS_TOKEN
+          # DB/Redis 等按需追加 envFrom 或 secretKeyRef
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9527
+            initialDelaySeconds: 5
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 1
+            successThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9527
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kode-app
+  labels:
+    app: kode-app
+spec:
+  selector:
+    app: kode-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 9527
+      protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,17 @@
+# Composer 分发归档导出规则。
+# 仅影响 create-project / require 下载的归档，不改 git 仓库内容。
+#
+# 与「库」的惯例相反：本仓库是 **项目模板**（type: project），create-project 拿到的就是用户
+# 自己的项目，因此 tests/ 等开发产物必须随包分发——否则生成的项目没有测试目录，
+# 而 composer.json 又声明了 `composer test`，命令必然失败。
+# （框架仓库 kode/framework 是 type: library，消费者安装到 vendor/，那边排除 tests/ 才是对的。）
+
+# 仅排除本机/仓库元数据，不排除开发产物
+/.workbuddy/           export-ignore
+/.github/              export-ignore
+
+# 运行时产物（仅保留目录占位 .gitkeep，由 bin/kode init 重建）
+/storage/cache/*       export-ignore
+/storage/logs/*        export-ignore
+/storage/framework/*   export-ignore
+/storage/heartbeat.log export-ignore
