@@ -2,11 +2,14 @@
 
 /*
  * 日志配置（Monolog，遵循 PSR-3）
+ *
+ * 路径由 __DIR__ 推出绝对：配置加载期 app() 尚未就绪，base_path() 会退化成相对 CWD，
+ * FPM（cwd=public/）下日志会写到 public/storage/logs，与 AGENTS.md 的排查路径脱节。
  */
 
 return [
     'name' => env('APP_NAME', 'kode'),
-    'path' => base_path('storage/logs/app.log'),
+    'path' => dirname(__DIR__) . '/storage/logs/app.log',
     'level' => env('LOG_LEVEL', 'debug'),
     'rotate' => true,
 

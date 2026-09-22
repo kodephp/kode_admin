@@ -33,11 +33,13 @@
         <env name="TENANT_RESOLVER" value="header"/>
         <env name="TENANT_STORAGE_ENABLED" value="true"/>
         <env name="TENANT_STORAGE_STRATEGY" value="database"/>
-        <env name="TENANT_STORAGE_TEMPLATE" value="mysql"/>
+        <!-- 模板连接刻意不注入：留空 = 跟随 database.default（框架 >= 1.7.6 起，
+             配了 connections 里没有的名字会在启动期抛错，不再静默借用默认凭证。
+             这里曾写死 mysql，而本项目的连接只有 pgsql/pgsql_read/sqlite。 -->
         <env name="TENANT_DB_PREFIX" value="tnt_"/>
         <env name="TENANT_STORAGE_ON_MISSING" value="fallback"/>
 
-        <!-- 健康检查集成测试：测试环境通常无可达 MySQL，关闭 db 探针避免就绪检查误报 503。 -->
+        <!-- 健康检查集成测试：单测环境不保证有可达数据库，关闭 db 探针避免就绪检查误报 503。 -->
         <env name="HEALTH_CHECK_DB" value="false"/>
 
         <!-- 框架默认改为「按需开启（opt-in）」：以下跨切面能力 config 默认值已翻转为 false。

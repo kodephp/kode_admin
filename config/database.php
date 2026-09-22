@@ -29,13 +29,16 @@ return [
                 'max' => (int) env('DB_POOL_MAX', 10),
                 'min' => (int) env('DB_POOL_MIN', 2),
                 'max_wait_time' => (int) env('DB_POOL_MAX_WAIT', 30),
+                // 仅 Swoole 协程池（kode/database ConnectionPool）会回收空闲连接；
+                // Native 运行时的进程池不做空闲回收，本键届时不生效。
                 'max_idle_time' => (int) env('DB_POOL_MAX_IDLE', 60),
             ] : null,
         ],
 
         'sqlite' => [
             'driver' => 'sqlite',
-            'database' => env('DB_SQLITE_PATH', storage_path('database.sqlite')),
+            // 绝对路径：配置加载期 app() 未就绪，storage_path() 会退化成相对 CWD（见 cache.php 同约定）
+            'database' => env('DB_SQLITE_PATH', dirname(__DIR__) . '/storage/database.sqlite'),
         ],
 
         // 读库（读写分离）：生产指向从库地址，演示环境默认与主库同实例（只验证路由）。
@@ -54,12 +57,6 @@ return [
     // 读写分离总开关（开启后 SELECT 走 pgsql_read，写走主库；事务内读强制走主库，保证读己之写）。
     // 注意：从库故障不会自动回主（会直接报错），生产需配合探针告警 + 手动切回（关本开关即全走主库）。
     'read_write_split' => (bool) env('DB_READ_WRITE_SPLIT', false),
-
-    // 慢查询日志（写入 Monolog）
-    'slow_log' => [
-        'enabled' => true,
-        'threshold' => 0.5,
-    ],
 
     /*
      * 请求级数据库事务（原子化写请求）。

@@ -15,8 +15,11 @@ declare(strict_types=1);
  *  - enabled=true   → 结合 rollout 灰度：
  *      rollout >= 100 → 全量；rollout <= 0 → 无；0<rollout<100 → 按 key 稳定分桶。
  *
- * 分桶键（bucket key）：FeatureMiddleware 自动取 X-User-Id → X-Tenant-Id → 客户端 IP，
+ * 分桶键（bucket key）：FeatureMiddleware 取 X-User-Id → X-Tenant-Id → 客户端 IP，
  * 保证同一用户/租户在灰度窗口内命中稳定，不会抖动。
+ * 注意：两个头只有在「直连对端属于 security.trusted_proxies」时才采信（默认空 = 不采信，
+ * 谁都能改的请求头做分桶等于把灰度控制权交给客户端），否则一律退到 IP 分桶。
+ * 想让灰度按用户/租户稳定命中，就把网关/负载均衡的出口网段写进 trusted_proxies。
  *
  * 进阶：用 FeatureManager::registerResolver() 接入 DB/Redis/配置中心的动态开关（见 docs）。
  */

@@ -24,7 +24,9 @@ return [
     // 顶层 path（Cookie 路径）会覆盖 drivers.file.path（存储目录）导致锁目录解析成 '/locks'。
     // Cookie 路径由 FileDriver/SessionMiddleware 默认取 '/'。
     'name' => env('SESSION_NAME', 'KODE_SESSION'),
-    'lifetime' => (int) env('SESSION_LIFETIME', 120),        // 分钟
+    // 秒：驱动侧 defaultLifetime、Redis TTL 与 Set-Cookie 有效期都按秒直接消费本值，
+    // 故此处须把「分钟」的环境变量换算成秒（与下方 gc_lifetime 同源同单位）。
+    'lifetime' => (int) env('SESSION_LIFETIME', 120) * 60,           // SESSION_LIFETIME 为分钟
     'domain' => env('SESSION_DOMAIN', null),
     'secure' => env('SESSION_SECURE', false),
     'http_only' => true,
@@ -51,10 +53,18 @@ return [
             // 进程内内存存储，适合测试 / CLI 一次性场景（不持久化）。
         ],
         'redis' => [
-            'host' => env('REDIS_HOST', '127.0.0.1'),
-            'port' => (int) env('REDIS_PORT', 6379),
-            'password' => env('REDIS_PASSWORD'),
-            'database' => (int) env('REDIS_DB', 0),
+            // 连接参数在 kode/session 里读的是「嵌套的 redis 段」（RedisDriver::__construct 取
+            // $config['redis']，再读 host/port/password/database/timeout）；平铺在 drivers.redis 下
+            // 会被整段忽略，表现为「配了不生效、静默连 127.0.0.1:6379 db0」。
+            // 注意这与 kode/cache 的扁平写法不同，两个包各读各的。
+            'redis' => [
+                'host' => env('REDIS_HOST', '127.0.0.1'),
+                'port' => (int) env('REDIS_PORT', 6379),
+                'password' => env('REDIS_PASSWORD'),
+                'database' => (int) env('REDIS_DB', 0),
+                'timeout' => (float) env('REDIS_TIMEOUT', 0.0),
+            ],
+            // 键名前缀由 AbstractDriver 读取（扁平层），不要挪进上面的 redis 段。
             'prefix' => 'kode:sess:',
         ],
         'cookie' => [
