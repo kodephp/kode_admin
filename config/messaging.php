@@ -22,7 +22,8 @@ declare(strict_types=1);
 return [
     // 总线驱动：messaging:consume 的取值口径为 --driver > 本键 > pubsub.default > memory（框架 >= 1.7.7）。
     // 它与下面 pubsub.default 是两回事——前者决定「消费进程连哪条总线」，后者决定
-    // Messaging::pubsub() 无参调用（即生产端）时的默认总线。两处都留空即可，通常只需配 pubsub.default。
+    // Messaging::pubsub() 无参调用（即生产端）时的默认总线。这里刻意留空：写死值会盖住你改过的
+    // pubsub.default，让生产/消费两端悄悄跑在不同总线上；只配下面一处即可（两端同步）。
     'default' => env('MESSAGING_DEFAULT', ''),
 
     // WebSocket（Messaging::server('ws://0.0.0.0:8080')）
