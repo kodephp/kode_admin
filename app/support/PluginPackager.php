@@ -16,6 +16,9 @@ use Kode\Framework\Http\Resp;
  */
 final class PluginPackager
 {
+    /** 市场包体积上限（下载侧闸门，与 SafeArchive 的解压预算分开）。 */
+    public const MAX_PACKAGE_BYTES = 20 * 1024 * 1024;
+
     /**
      * 打包本地插件为 zip（返回临时文件路径，失败 null）。
      */
@@ -212,56 +215,33 @@ final class PluginPackager
     }
 
     /**
+     * 从市场拉包并落盘 + 登记（**不**执行包内代码）。
+     *
+     * @param string $operator 记账操作者；HTTP 入口传登录 uid，让账本能指回是谁装的
      * @return array{ok: bool, msg?: string, name?: string, files?: int, version?: string, kode?: string}
      */
-    public static function installRemote(string $url, string $sha256, string $name): array
+    public static function installRemote(string $url, string $sha256, string $name, string $operator = 'system'): array
     {
         if (!preg_match('/^[a-z0-9_]{2,32}$/', $name)) {
             return ['ok' => false, 'msg' => '插件名非法'];
         }
-        if (!preg_match('#^https?://#i', $url)) {
-            return ['ok' => false, 'msg' => '只允许 http(s) 地址'];
-        }
         if (!preg_match('/^[0-9a-f]{64}$/', $sha256)) {
             return ['ok' => false, 'msg' => 'sha256 非法'];
         }
-        // SSRF 防护：拒绝内网/保留地址（云元数据 169.254.169.254 等）。
-        // 本地联调市场可用 MARKET_ALLOW_PRIVATE=true 放行。
-        $host = (string) parse_url($url, PHP_URL_HOST);
-        $ip = gethostbyname($host);
-        $allowPrivate = (bool) env('MARKET_ALLOW_PRIVATE', false);
-        if (!$allowPrivate && filter_var(
-            $ip,
-            FILTER_VALIDATE_IP,
-            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-        ) === false) {
-            return ['ok' => false, 'msg' => '拒绝内网地址'];
+        // SSRF 口径统一走 RemoteFetch：逐跳过闸 + 钉住已校验的 IP（见该类注释）
+        $vet = RemoteFetch::vet($url);
+        if ($vet['ok'] !== true) {
+            return ['ok' => false, 'msg' => (string) ($vet['msg'] ?? '地址不可用')];
         }
 
         $tmp = sys_get_temp_dir() . "/plugin_dl_{$name}_" . bin2hex(random_bytes(4)) . '.zip';
         $verified = ['ok' => false];
         $manifest = [];
+        $count = 0;
         try {
-            $ch = curl_init($url);
-            $fp = fopen($tmp, 'w');
-            if ($fp === false) {
-                return ['ok' => false, 'msg' => '下载失败'];
-            }
-            curl_setopt_array($ch, [
-                CURLOPT_FILE => $fp,
-                CURLOPT_TIMEOUT => 30,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_MAXREDIRS => 3,
-                CURLOPT_FAILONERROR => true,
-            ]);
-            $ok = curl_exec($ch);
-            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            fclose($fp);
-            if (!$ok || $httpCode >= 400 || !is_file($tmp) || filesize($tmp) > 20 * 1024 * 1024) {
-                @unlink($tmp);
-
-                return ['ok' => false, 'msg' => '下载失败或包超限（20MB）'];
+            $fetched = RemoteFetch::toFile($url, $tmp, self::MAX_PACKAGE_BYTES);
+            if (!$fetched['ok']) {
+                return ['ok' => false, 'msg' => (string) $fetched['msg']];
             }
             if (hash_file('sha256', $tmp) !== $sha256) {
                 @unlink($tmp);
@@ -289,15 +269,24 @@ final class PluginPackager
             return ['ok' => false, 'msg' => '安装失败：' . $e->getMessage()];
         }
 
-        // 状态与版本同时登记：version 缺失会让 upgrade() 永远从 0.0.0 起算、误判可升级。
+        // 状态与版本同时登记：version 缺失会让 upgrade() 从空版本起算、误判可升级。
+        // 走 changeVersion 而不是 setVersion：这一处此前只改列不留痕，账本于是缺了
+        // 「谁在什么时候从市场装了哪个版本」整一类记录（install/备份恢复同理）。
+        $version = (string) ($verified['version'] ?? '1.0.0');
+        $prior = (string) (PluginMarket::states()[$name]['version'] ?? '');
         PluginMarket::setStatus($name, PluginMarket::ENABLED);
-        PluginMarket::setVersion($name, (string) ($verified['version'] ?? '1.0.0'));
+        PluginVersionHistory::changeVersion($name, $version, PluginVersionHistory::OP_INSTALL, '', $operator, [
+            'via' => 'marketplace',
+            // 只记 sha256 不记 url：地址串里可能带私有市场的访问凭证，而这份 detail
+            // 会经 GET /api/plugins/{name}/version-history 出给任何有 plugins:view 的账号
+            'sha256' => $sha256,
+        ], $prior);
 
         return [
             'ok'      => true,
             'name'    => $name,
             'files'   => $count,
-            'version' => (string) ($verified['version'] ?? '1.0.0'),
+            'version' => $version,
             'kode'    => isset($manifest['kode']) && is_string($manifest['kode'])
                 ? $manifest['kode']
                 : null,
@@ -305,45 +294,49 @@ final class PluginPackager
     }
 
     /**
+     * 市场包条目规则（纯函数，离线可测）：true 落盘，false 有意跳过，违规抛错。
+     *
+     * 「跳过」只留给业务过滤，安全违规一律抛——逐条目 `continue` 会把半装当成功。
+     *
+     * @throws \RuntimeException 非 .php / 隐藏条目 / 落点不在约定的两处
+     */
+    public static function packageEntry(string $rel, string $name): bool
+    {
+        // 清单由 readManifest() 在落盘前消费，不入库：它不是代码，
+        // 留在 plugins/ 根下只会被别的扫描路径误认。
+        if ($rel === 'plugin.json') {
+            return false;
+        }
+        // 仅收 .php：市场协议只传代码，别的扩展名（.so/.sh/二进制）不可审阅
+        if (!str_ends_with($rel, '.php')) {
+            throw new \RuntimeException('包内含非 .php 条目：' . $rel);
+        }
+        // 点开头条目（.env.php / .htaccess）：落在 web 可达目录里就是配置注入。
+        // `(^|/)\.` 顺带盖住了 `..` 段——越界在 SafeArchive::normalize 里另有一道，两层不共享实现。
+        if (preg_match('#(^|/)\.#', $rel) === 1) {
+            throw new \RuntimeException('包内含隐藏文件条目：' . $rel);
+        }
+        $isMain = (bool) preg_match('/^[A-Za-z0-9_]+Plugin\.php$/', $rel);
+        if (!$isMain && !str_starts_with($rel, $name . '/')) {
+            throw new \RuntimeException('包内条目位置非法：' . $rel);
+        }
+
+        return true;
+    }
+
+    /**
      * 安全解包到 plugins/（框架根目录，返回落盘文件数）。
+     *
+     * 违规条目由 SafeArchive 抛错并回滚已落盘文件——早先的逐条目 `continue`
+     * 会把「半装」当成功返回给调用方，状态照常翻成启用，缺文件要到运行时才炸。
      */
     private static function extract(string $zipPath, string $name): int
     {
-        $zip = new \ZipArchive();
-        if ($zip->open($zipPath) !== true) {
-            return 0;
-        }
-        $base = PluginMarket::baseDir();
-        $count = 0;
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            $entry = (string) $zip->getNameIndex($i);
-            $entry = ltrim(str_replace('\\', '/', $entry), '/');
-            // 越界/绝对路径/隐藏文件一律拒绝；仅收 .php。
-            if ($entry === '' || str_contains($entry, '..') || !str_ends_with($entry, '.php')) {
-                continue;
-            }
-            // 仅允许根级 *Plugin.php 与 <name>/ 下文件。
-            $isMain = (bool) preg_match('/^[A-Za-z0-9_]+Plugin\.php$/', $entry);
-            if (!$isMain && !str_starts_with($entry, $name . '/')) {
-                continue;
-            }
-            $dest = $base . '/' . $entry;
-            $dir = dirname($dest);
-            if (!is_dir($dir)) {
-                mkdir($dir, 0777, true);
-            }
-            if (is_file($dest)) {
-                continue; // 已存在不覆盖（升级走 upgrade 流程，防偷梁换柱）。
-            }
-            $content = $zip->getFromIndex($i);
-            if ($content === false) {
-                continue;
-            }
-            file_put_contents($dest, $content);
-            $count++;
-        }
-        $zip->close();
-
-        return $count;
+        return SafeArchive::extract(
+            $zipPath,
+            PluginMarket::baseDir(),
+            static fn (string $rel): bool => self::packageEntry($rel, $name),
+            true
+        );
     }
 }

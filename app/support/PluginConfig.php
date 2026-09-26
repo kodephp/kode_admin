@@ -40,7 +40,7 @@ final class PluginConfig
     /** 字段类型白名单（插件 schema 的 `type` 必须在此范围内）。 */
     public const TYPES = ['string', 'number', 'boolean', 'textarea', 'select'];
 
-    /** 掩码值（与 ConfigController::maskIfSensitive 保持一致）。 */
+    /** 掩码值：ConfigController 读接口用的是同一个常量（两处各写一份迟早长得不一样）。 */
     public const MASK = '******';
 
     /** 字段名格式：小写字母开头，1–48 位小写字母/数字/下划线。 */
@@ -76,6 +76,59 @@ final class PluginConfig
     }
 
     /**
+     * 全仓「schema 声明为 secret」的完整存储键集合。
+     *
+     * 为什么必须有这一份：`secret` 只写在插件代码的 configSchema() 里，值却统一落在
+     * `kode_sys_configs`（cgroup=plugin）。而 ConfigController 的掩码是按**键名子串**猜的
+     * （secret|passwd|token|private|salt|credential），于是
+     * `plugin.storage_driver.ak` / `.sk` 这种「schema 明写着 secret、键名一个字母都不中」的
+     * 行会被 `GET /api/configs` 原样下发——拿着 `configs:view`（系统设置/存储配置菜单）的
+     * 非超管就能看到对象存储的 AccessKey。掩码口径必须由 schema 说了算，不能两处各猜一次。
+     *
+     * @return array<string, true> 键名 => 是否 secret
+     */
+    public static function secretKeys(): array
+    {
+        $out = [];
+        foreach (PluginMarket::discover() as $name => $class) {
+            /** @var PluginInterface $plugin */
+            $plugin = new $class();
+            if (!method_exists($plugin, 'configSchema')) {
+                continue;
+            }
+            foreach (self::normalizeSchema((array) $plugin->configSchema()) as $field => $def) {
+                if ($def['secret'] === true) {
+                    $out[self::keyFor((string) $name, (string) $field)] = true;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * 单个键是否 secret（schema 说了算；非 plugin. 前缀一律 false）。
+     *
+     * 键形态恒为 `plugin.<name>.<field>`：插件名与字段名都不含点（名字由
+     * PluginMarket::discover() 从文件名来，字段过 FIELD_PATTERN），所以按最后一个点切。
+     */
+    public static function isSecretKey(string $key): bool
+    {
+        if (!str_starts_with($key, self::PREFIX)) {
+            return false;
+        }
+        $rest = substr($key, strlen(self::PREFIX));
+        $pos = strrpos($rest, '.');
+        if ($pos === false) {
+            return false;
+        }
+
+        $schema = self::schemaFor(substr($rest, 0, $pos));
+
+        return (bool) ($schema[substr($rest, $pos + 1)]['secret'] ?? false);
+    }
+
+    /**
      * 规范化 schema：补默认值并丢弃字段名不合法的项。
      *
      * `min`/`max` 语义按类型区分：`number` 是数值区间（`min` 非空），
@@ -104,12 +157,14 @@ final class PluginConfig
             }
 
             $out[$field] = [
-                'label'       => substr((string) ($def['label'] ?? $field), 0, 64),
+                // 插件声明的 label/placeholder 基本是中文，按字节切会把响应打成
+                // 非法 UTF-8（json_encode 带 JSON_THROW_ON_ERROR）。
+                'label'       => Clip::chars((string) ($def['label'] ?? $field), 64),
                 'type'        => $type,
                 'default'     => self::cast((string) ($def['default'] ?? ''), $type, $options),
                 'required'    => (bool) ($def['required'] ?? false),
                 'secret'      => (bool) ($def['secret'] ?? false),
-                'placeholder' => substr((string) ($def['placeholder'] ?? ''), 0, 255),
+                'placeholder' => Clip::chars((string) ($def['placeholder'] ?? ''), 255),
                 'options'     => $options,
                 // 语义按类型区分：number 的 min/max = 数值区间；其余 = 字符串长度上限。
                 'max'         => $type === 'number'
@@ -163,6 +218,49 @@ final class PluginConfig
         }
 
         return ['schema' => $schema, 'values' => $values, 'saved' => $saved];
+    }
+
+    /**
+     * 某插件的全部配置项（平铺 map：field => value），供备份/迁移/导入消费。
+     *
+     * 与 allFor() 的差异：
+     *  - allFor() 面向表单渲染，返回 { schema, values, saved } 三层结构；
+     *  - all() 面向数据搬运，返回 { field => raw_value } 平铺 map，可直接喂给 save()。
+     *
+     * secret 字段一并返回真值（不是掩码）——备份/迁移场景需要原样复原；
+     * 前端展示走 allFor() 已做掩码，不会漏出。
+     *
+     * @return array<string, string>
+     */
+    public static function all(string $name): array
+    {
+        if (!preg_match('/^[a-z0-9_]{2,32}$/', $name)) {
+            return [];
+        }
+        $prefix = self::PREFIX . $name . '.';
+
+        try {
+            $rows = Db::select(
+                'SELECT ckey, cvalue FROM kode_sys_configs WHERE cgroup = ? AND ckey LIKE ?',
+                [self::GROUP, $prefix . '%']
+            );
+        } catch (\Throwable) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($rows as $row) {
+            $ckey = (string) ($row['ckey'] ?? '');
+            if (str_starts_with($ckey, $prefix)) {
+                $field = substr($ckey, strlen($prefix));
+                // 与 normalizeSchema 的 FIELD_PATTERN 保持一致，防越权读同前缀其它键。
+                if (preg_match(self::FIELD_PATTERN, $field)) {
+                    $out[$field] = (string) ($row['cvalue'] ?? '');
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**

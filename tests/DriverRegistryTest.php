@@ -21,6 +21,11 @@ use PHPUnit\Framework\TestCase;
  *
  * 隔离性：第 3、5 组会写 kode_plugins 状态行或用临时插件文件，
  * tearDown 精确还原/删除，并 flush 两个引擎的静态缓存，不留脏状态。
+ *
+ * 另一条隔离纪律：本测试不得写死「哪个驱动名没人声明」。
+ * 仓库新增插件（如 flysystem_storage 声明 s3/oss/cos/minio）会让写死的
+ * `oss` / `s3` / `cos` 一夜之间变成「已声明」，用例就从测契约退化成测插件清单。
+ * 需要空闲驱动名时一律走 freeDriverName() 运行时挑选。
  */
 final class DriverRegistryTest extends TestCase
 {
@@ -62,9 +67,16 @@ final class DriverRegistryTest extends TestCase
 
     public function test_readonly_interfaces(): void
     {
+        DriverRegistry::flush();
+        // 「未声明」必须是运行时判定，不能写死某个名字（插件增减会让写死的名字失效）。
+        $undeclared = $this->freeDriverName('drv_probe_undeclared');
+
         $this->assertTrue(DriverRegistry::has('local'));
         $this->assertTrue(DriverRegistry::has(' LOCAL '), 'has() 必须容忍大小写与空白');
-        $this->assertFalse(DriverRegistry::has('oss'), '未声明的驱动不得可用');
+        $this->assertFalse(
+            DriverRegistry::has($undeclared),
+            "未声明的驱动不得可用：「{$undeclared}」当前无任何已启用插件声明"
+        );
 
         $allowed = DriverRegistry::allowed();
         $this->assertContains('local', $allowed);
@@ -73,7 +85,7 @@ final class DriverRegistryTest extends TestCase
         $this->assertSame($sorted, $allowed, 'allowed() 必须按字典序返回（前后端共用一份 SoT）');
 
         $this->assertSame('storage_driver', DriverRegistry::sourceOf('local'));
-        $this->assertNull(DriverRegistry::sourceOf('oss'));
+        $this->assertNull(DriverRegistry::sourceOf($undeclared));
     }
 
     public function test_paused_plugin_driver_drops_out_immediately(): void
@@ -102,13 +114,16 @@ final class DriverRegistryTest extends TestCase
 
     public function test_illegal_driver_names_are_dropped_not_fatal(): void
     {
-        $this->writeTempPlugin('drv_probe_bad', "return ['BAD-NAME', ' oss ', 42, 'a', 's3'];");
+        DriverRegistry::flush();
+        $valid = $this->freeDriverName('drv_probe_valid');
+        $this->writeTempPlugin('drv_probe_bad', "return ['BAD-NAME', ' oss ', 42, 'a', '{$valid}'];");
+        PluginMarket::flush();
         DriverRegistry::flush();
 
         $this->assertFalse(DriverRegistry::has('BAD-NAME'), '大写开头不合法，必须丢弃');
         $this->assertFalse(DriverRegistry::has('42'), '非字符串必须丢弃');
         $this->assertFalse(DriverRegistry::has('a'), '长度不足 2 必须丢弃');
-        $this->assertTrue(DriverRegistry::has('s3'), '合法驱动必须正常注册');
+        $this->assertTrue(DriverRegistry::has($valid), "合法驱动必须正常注册：{$valid}");
     }
 
     /** 跨插件同名驱动：注册表保留先发现者，审计必须判漂移（不能静默失效）。 */
@@ -119,10 +134,14 @@ final class DriverRegistryTest extends TestCase
         PluginMarket::flush();
         DriverRegistry::flush();
 
-        // 两个临时插件 + 现有 storage_driver 都声明 local：注册表只留一个。
+        // storage_driver 与两个临时插件都声明 local：注册表只能留一个来源。
         $available = DriverRegistry::available();
-        $this->assertArrayHasKey('local', $available);
-        $this->assertLessThanOrEqual(1, count($available));
+        $this->assertArrayHasKey('local', $available, 'local 必须仍在注册表中可用');
+        $this->assertContains(
+            $available['local'],
+            ['storage_driver', 'drv_probe_a', 'drv_probe_b'],
+            '同名驱动的来源必须是声明者之一（保留先发现者，不做静默合并）'
+        );
 
         $driftA = implode("\n", PluginContract::audit(new \Kode\Plugins\DrvProbeAPlugin())['drift']);
         $this->assertStringContainsString('冲突', $driftA, '同名驱动必须判漂移');
@@ -132,13 +151,34 @@ final class DriverRegistryTest extends TestCase
     /** 无冲突时不得误报（防审计噪声）。 */
     public function test_distinct_drivers_produce_no_conflict_drift(): void
     {
-        $this->writeTempPlugin('drv_probe_c', "return ['cos'];");
-        $this->writeTempPlugin('drv_probe_d', "return ['s3'];");
+        DriverRegistry::flush();
+        $driverC = $this->freeDriverName('drv_probe_c_free');
+        $driverD = $this->freeDriverName('drv_probe_d_free');
+        $this->writeTempPlugin('drv_probe_c', "return ['{$driverC}'];");
+        $this->writeTempPlugin('drv_probe_d', "return ['{$driverD}'];");
         PluginMarket::flush();
         DriverRegistry::flush();
 
         $this->assertSame([], PluginContract::audit(new \Kode\Plugins\DrvProbeCPlugin())['drift'],
             '声明互不冲突的驱动不得报漂移');
+    }
+
+    /**
+     * 取一个当前「无任何已启用插件声明」的驱动名。
+     *
+     * 用例必须与「本仓库发布了哪些插件」解耦：写死 `oss` / `s3` / `cos` 会随插件
+     * 增减而失效——flysystem_storage 一启用，这三个名字就再也不是「未声明」的了。
+     * 因此改为运行时按需挑一个空闲名（返回值仍满足 DRIVER_NAME_PATTERN）。
+     */
+    private function freeDriverName(string $hint): string
+    {
+        $taken = DriverRegistry::available();
+        $name = $hint;
+        while (isset($taken[$name])) {
+            $name .= 'x';
+        }
+
+        return $name;
     }
 
     /**

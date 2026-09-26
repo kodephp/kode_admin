@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests;
 
-use app\admin\http\middleware\RequirePerm;
+use app\admin\middleware\RequirePerm;
 use Kode\Framework\Http\Resp;
 use Kode\Http\Request;
 use Nyholm\Psr7\ServerRequest;

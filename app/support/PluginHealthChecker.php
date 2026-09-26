@@ -15,6 +15,11 @@ use Kode\Framework\Plugin\PluginManager;
  *
  * 只读：解析路由表/命令内核/事件派发器/调度器不会触发任何副作用。
  *
+ * ok 的口径（各 check 统一，别一处「有一个就算过」一处「全到才算过」）：
+ *  - 没声明 = 不适用：applicable=false、ok=true（组件插件没有菜单/命令是正常形态）；
+ *  - 声明了 = 必须**全部**落地：ok 取「已注册数 === 声明数」，
+ *    「3 条命令只注册上 1 条」是注册链路真断了，回 ok=true 等于把缺失渲染成健康。
+ *
  * 使用：
  *   $health = PluginHealthChecker::check($plugin);
  *   // ['status' => 'healthy'|'degraded'|'unhealthy', 'checks' => [...], 'summary' => '...']
@@ -42,7 +47,7 @@ final class PluginHealthChecker
         $checks['events'] = self::checkEvents($plugin);
 
         // 4. 定时任务
-        $checks['crons'] = self::checkCrons($name);
+        $checks['crons'] = self::checkCrons($name, $plugin);
 
         // 5. 菜单
         $checks['menus'] = self::checkMenus($plugin);
@@ -110,11 +115,14 @@ final class PluginHealthChecker
 
             return [
                 'applicable' => true,
-                'ok' => count($routes) > 0,
+                // 路由数只作信息展示，不判健康：CAPABILITY_SCHEMA 里没有 routes 这条能力，
+                // 没有「声明了却没注册」的对账基准；纯服务/命令型插件 0 路由是正常形态
+                // （detail 的兜底文案本来也承认这点），把它算成异常会让每个组件插件都 degraded。
+                'ok' => true,
                 'count' => count($routes),
                 'routes' => $routes,
                 'detail' => count($routes) > 0
-                    ? "已注册 {count} 条路由"
+                    ? sprintf('已注册 %d 条路由', count($routes))
                     : '未注册任何路由（插件可能只提供服务/命令/事件）',
             ];
         } catch (\Throwable $e) {
@@ -164,14 +172,14 @@ final class PluginHealthChecker
 
             return [
                 'applicable' => true,
-                'ok' => $registeredCount > 0,
+                'ok' => $registeredCount === count($commands),
                 'count' => $registeredCount,
                 'declared' => count($commands),
                 'commands' => array_values(array_intersect_key($registered, array_flip(array_filter(array_map('strval', $commands))))),
                 'missing' => $missing,
                 'detail' => $registeredCount === count($commands)
-                    ? "全部 {count} 条命令已注册"
-                    : "{count}/{declared} 条命令已注册，{missing} 条缺失",
+                    ? sprintf('全部 %d 条命令已注册', $registeredCount)
+                    : sprintf('%d/%d 条命令已注册，%d 条缺失', $registeredCount, count($commands), count($missing)),
             ];
         } catch (\Throwable $e) {
             return [
@@ -213,14 +221,14 @@ final class PluginHealthChecker
 
             return [
                 'applicable' => true,
-                'ok' => $registeredCount > 0,
+                'ok' => $registeredCount === count($events),
                 'count' => $registeredCount,
                 'declared' => count($events),
                 'events' => $registered,
                 'missing' => array_values($missing),
                 'detail' => $registeredCount === count($events)
-                    ? "全部 {count} 个事件监听已注册"
-                    : "{count}/{declared} 个事件监听已注册",
+                    ? sprintf('全部 %d 个事件监听已注册', $registeredCount)
+                    : sprintf('%d/%d 个事件监听已注册', $registeredCount, count($events)),
             ];
         } catch (\Throwable $e) {
             return [
@@ -234,34 +242,47 @@ final class PluginHealthChecker
     }
 
     /**
-     * 检查定时任务：有多少条任务标记了 plugin:<name> 来源。
+     * 检查定时任务：声明了多少条、调度器里真有多少条来自本插件。
+     *
+     * 用 bySource() 而不是 tasks()：ScheduleDispatcher 上没有 tasks()（那是
+     * Scheduler 的方法），旧写法在 foreach 处抛 \Error，被下面的 catch(\Throwable)
+     * 吞成「调度器不可解析」，而插件页的定时任务 tab 因此恒空——
+     * 「什么都没查」和「查了是 0 条」长得一样，正是这类缺陷最难发现的地方。
      */
-    private static function checkCrons(string $name): array
+    private static function checkCrons(string $name, object $plugin): array
     {
+        if (!method_exists($plugin, 'crons')) {
+            return ['applicable' => false, 'ok' => true, 'count' => 0, 'tasks' => [], 'detail' => '未声明定时任务'];
+        }
+
         $expected = "plugin:{$name}";
         try {
+            $declared = (array) $plugin->crons();
+            if (empty($declared)) {
+                return ['applicable' => false, 'ok' => true, 'count' => 0, 'tasks' => [], 'detail' => '未声明定时任务'];
+            }
+
             $dispatcher = resolve(\Kode\Framework\Scheduling\ScheduleDispatcher::class);
 
             $tasks = [];
-            foreach ($dispatcher->tasks() as $task) {
-                if (($task->source ?? '') === $expected) {
-                    $tasks[] = [
-                        'name' => $task->name,
-                        'expression' => $task->expression ?? '',
-                        'description' => $task->description ?? '',
-                        'enabled' => $task->enabled ?? true,
-                    ];
-                }
+            foreach ($dispatcher->bySource($expected) as $task) {
+                $tasks[] = [
+                    'name' => $task->name,
+                    'expression' => $task->expression,
+                    'description' => $task->description ?? '',
+                    'enabled' => $task->enabled,
+                ];
             }
 
             return [
                 'applicable' => true,
-                'ok' => count($tasks) > 0,
+                'ok' => count($tasks) === count($declared),
                 'count' => count($tasks),
+                'declared' => count($declared),
                 'tasks' => $tasks,
-                'detail' => count($tasks) > 0
-                    ? "已注册 {count} 条定时任务"
-                    : '未注册任何定时任务',
+                'detail' => count($tasks) === count($declared)
+                    ? sprintf('全部 %d 条定时任务已注册', count($tasks))
+                    : sprintf('%d/%d 条定时任务已注册', count($tasks), count($declared)),
             ];
         } catch (\Throwable $e) {
             return [
@@ -269,7 +290,7 @@ final class PluginHealthChecker
                 'ok' => false,
                 'count' => 0,
                 'tasks' => [],
-                'detail' => '调度器不可解析：' . $e->getMessage(),
+                'detail' => '定时任务读取失败：' . $e->getMessage(),
             ];
         }
     }
@@ -285,17 +306,19 @@ final class PluginHealthChecker
 
         try {
             $menus = (array) $plugin->menus();
+            if (empty($menus)) {
+                return ['applicable' => false, 'ok' => true, 'count' => 0, 'menus' => [], 'detail' => '未声明菜单'];
+            }
+
             return [
                 'applicable' => true,
-                'ok' => count($menus) > 0,
+                'ok' => true,
                 'count' => count($menus),
                 'menus' => array_map(static fn ($m) => [
                     'path' => $m['path'] ?? '',
                     'title' => $m['title'] ?? '',
                 ], array_values($menus)),
-                'detail' => count($menus) > 0
-                    ? "已声明 {count} 个菜单项"
-                    : '未声明菜单',
+                'detail' => sprintf('已声明 %d 个菜单项', count($menus)),
             ];
         } catch (\Throwable $e) {
             return [
@@ -319,15 +342,19 @@ final class PluginHealthChecker
             $schema = $config['schema'] ?? [];
 
             return [
-                'applicable' => true,
-                'ok' => count($saved) > 0 || count($schema) === 0,
+                // 只作信息展示，不判健康：schema 里的 default 是产品支持的一种运行状态
+                // （PluginConfig::get() 未落库就回落 default），「装完还没配」既不是坏、
+                // 也不该让整只插件在列表里翻黄——否则每只新装插件都是 degraded，
+                // 黄色就失去意义了。已保存/总数写在 detail 里。
+                'applicable' => count($schema) > 0,
+                'ok' => true,
                 'saved' => count($saved),
                 'schema_count' => count($schema),
                 'detail' => count($schema) === 0
                     ? '未声明配置 schema'
                     : (count($saved) > 0
-                        ? "已保存 {saved}/{schema_count} 项配置"
-                        : "未保存任何配置（{schema_count} 项使用默认值）"),
+                        ? sprintf('已保存 %d/%d 项配置', count($saved), count($schema))
+                        : sprintf('未保存任何配置（%d 项使用默认值）', count($schema))),
             ];
         } catch (\Throwable $e) {
             return [
@@ -373,14 +400,14 @@ final class PluginHealthChecker
 
             return [
                 'applicable' => true,
-                'ok' => count($registered) > 0,
+                'ok' => count($registered) === count($declared),
                 'count' => count($registered),
                 'declared' => count($declared),
                 'drivers' => $registered,
                 'missing' => array_values($missing),
                 'detail' => count($registered) === count($declared)
-                    ? "全部 {count} 个驱动已注册"
-                    : "{count}/{declared} 个驱动已注册",
+                    ? sprintf('全部 %d 个驱动已注册', count($registered))
+                    : sprintf('%d/%d 个驱动已注册', count($registered), count($declared)),
             ];
         } catch (\Throwable $e) {
             return [
@@ -411,8 +438,8 @@ final class PluginHealthChecker
                 'detail' => count($deps) === 0
                     ? '无依赖'
                     : (count($missing) === 0
-                        ? "全部 {count} 个依赖就绪"
-                        : "{count} 个依赖中 {missing} 个未就绪"),
+                        ? sprintf('全部 %d 个依赖就绪', count($deps))
+                        : sprintf('%d 个依赖中 %d 个未就绪', count($deps), count($missing))),
             ];
         } catch (\Throwable $e) {
             return [

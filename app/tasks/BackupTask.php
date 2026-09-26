@@ -19,15 +19,10 @@ final class BackupTask extends Task
     public function handle(): void
     {
         try {
-            $file = DbBackup::run();
-            $dir = base_path('storage/backups');
-            if (!is_dir($dir)) {
-                mkdir($dir, 0777, true);
-            }
-            $dest = $dir . '/kode_backup_' . date('Ymd_His') . '.sql';
-            rename($file, $dest);
+            // 目录由 DbBackup 建（0775）并以 0600 落盘，任务不再自己 mv 临时文件
+            $dest = DbBackup::run(null, (string) base_path('storage/backups'));
 
-            $files = glob($dir . '/kode_backup_*.sql') ?: [];
+            $files = glob(dirname($dest) . '/kode_backup_*.sql') ?: [];
             rsort($files);
             foreach (array_slice($files, 4) as $old) {
                 @unlink($old);

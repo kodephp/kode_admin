@@ -53,12 +53,16 @@ final class ApiEnvelope
     }
 
     /**
-     * 分页信封：{code:0, msg, duration, data, total, page, size}。
+     * 分页信封：{code, msg, dur, data, total, page, size} + 调用方补充的同级键。
+     *
+     * $extra 是给「这一页只是部分口径」这类元信息的落点（如 unreadable_shards）：
+     * 它们与 total/page/size 同级、恒在，缺键会让客户端分不清「老后端」与「一切正常」。
      *
      * @param list<mixed> $items
+     * @param array<string, mixed> $extra
      */
-    public static function page(array $items, int $total, int $page, int $size, ?float $t0 = null): ResponseInterface
+    public static function page(array $items, int $total, int $page, int $size, array $extra = [], ?float $t0 = null): ResponseInterface
     {
-        return self::ok($items, $t0, ['total' => $total, 'page' => $page, 'size' => $size]);
+        return self::ok($items, $t0, ['total' => $total, 'page' => $page, 'size' => $size] + $extra);
     }
 }

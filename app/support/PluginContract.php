@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace app\support;
 
-use app\admin\http\middleware\RequirePerm;
+use app\admin\middleware\RequirePerm;
 use Kode\Framework\Plugin\PluginInterface;
 
 /**
@@ -106,6 +106,8 @@ final class PluginContract
             'name'          => is_object($plugin) && method_exists($plugin, 'name') ? (string) $plugin->name() : '',
             'class'         => $plugin::class,
             'version'       => (string) (method_exists($plugin, 'version') ? $plugin->version() : '1.0.0'),
+            // description 是可选方法：插件没实现就返回空串，前端不展示（避免"暂无简介"噪音）
+            'description'   => (string) (method_exists($plugin, 'description') ? $plugin->description() : ''),
             'capabilities'  => $capabilities,
             'groups'        => array_filter($grouped, static fn($v) => $v !== []),
             'tables'        => self::listOf($plugin, 'tables', $errors),
@@ -113,6 +115,9 @@ final class PluginContract
             'commands'      => self::listOf($plugin, 'commands', $errors),
             'events'        => self::mapOf($plugin, 'events', $errors),
             'crons'         => self::listOf($plugin, 'crons', $errors),
+            // tenantCrons 是可选方法：插件声明"这个任务是多租户任务"，cron 到达时应为所有租户同步执行。
+            // 返回任务名数组（string 或 {name, ...} 对象），框架据此在 ScheduleDispatcher 层做租户分派。
+            'tenant_crons'  => self::listOf($plugin, 'tenantCrons', $errors),
             'requires'      => self::listOf($plugin, 'requires', $errors),
             'permissions'   => self::listOf($plugin, 'permissions', $errors),
             'drivers'       => self::listOf($plugin, 'drivers', $errors),
@@ -671,9 +676,14 @@ final class PluginContract
      * 无论怎么勾角色都过不了这道门禁，等于永久锁死（声明⟺实现漂移的
      * 另一个方向：实现了消费、忘了声明供给）。
      *
-     * 判定时口径：码只需被**任意**插件的 permissions() 声明即可（跨插件
-     * 复用合法，如公共的 storage:view）；归属报告给**挂门禁的那个插件**
-     * （按 plugin:<name> 来源标签），因为它是该补声明的一方。
+     * 判据换了两次，第二次才是对的：原先比的是「各插件 permissions() 的并集」，
+     * 但**那张面从来不是授予面** —— 角色页能勾到的是 `PermCatalog::groups()` 那三张
+     * 输入面（菜单 auth_code ∪ 按钮码 ∪ permissions()）。于是 17 个门禁码里 11 个
+     * 操作码（workflow:edit / notices:create / wallet:adjust …）明明勾不到、审计却全绿。
+     * 现在与授予面同源：码不在 `PermCatalog::codes()` 里就是漂移。
+     *
+     * 授予面读不出来（DB 异常）时判**漂移并写明原因**，不静默放过：
+     * 「无法验证」渲染成 OK，等于把这条门禁在最需要它的环境里关掉。
      *
      * 只读：仅遍历 Router 已注册路由与中间件实例，不发起请求、不改动路由表。
      *
@@ -697,14 +707,19 @@ final class PluginContract
             return [];
         }
 
-        $declared = self::allDeclaredPerms();
+        try {
+            $grantable = PermCatalog::codes();
+        } catch (\Throwable $e) {
+            return ['permissions：授予面读不出来（' . $e->getMessage() . '），无法判定路由门禁码是否勾得到'];
+        }
         $drift = [];
         foreach ($gates as $code) {
-            if (in_array($code, $declared, true)) {
+            if (in_array($code, $grantable, true)) {
                 continue;
             }
-            $drift[] = "permissions：路由门禁要求权限码 {$code}，但没有任何插件在 permissions() 中声明"
-                . '（权限目录里勾不到这个码，非超管用户会被永久锁死）';
+            $drift[] = "permissions：路由门禁要求权限码 {$code}，但它不在权限目录里"
+                . '（菜单 auth_code、按钮码、插件 permissions() 三张面都没有它，'
+                . '角色页勾不到 = 非超管用户被永久锁死）';
         }
 
         return $drift;
@@ -757,38 +772,6 @@ final class PluginContract
         );
 
         return [array_values(array_keys($all)), $bySource];
-    }
-
-    /**
-     * 全部已发现插件声明的权限码并集（阶段 2.3 的比对基准）。
-     *
-     * 与 auditRequires() 同理：不缓存，保证每次审计都反映当前真实的
-     * discover() 结果，不因请求内状态残留而误判。
-     *
-     * @return list<string>
-     */
-    private static function allDeclaredPerms(): array
-    {
-        $all = [];
-        foreach (PluginMarket::discover() as $class) {
-            try {
-                $inst = new $class();
-            } catch (\Throwable) {
-                continue;
-            }
-            $r = self::call($inst, 'permissions');
-            if ($r['error'] !== null) {
-                continue;
-            }
-            foreach ((array) $r['value'] as $code) {
-                $code = trim((string) $code);
-                if ($code !== '') {
-                    $all[$code] = true;
-                }
-            }
-        }
-
-        return array_values(array_keys($all));
     }
 
     /**

@@ -12,11 +12,11 @@ namespace app\support;
  */
 final class Mask
 {
-    /** 手机号：13800138000 → 138****8000 */
+    /** 手机号：13800138000 → 138****8000（按字符计数，脏数据不能把响应打崩） */
     public static function phone(string $phone): string
     {
-        return strlen($phone) >= 7
-            ? substr($phone, 0, 3) . '****' . substr($phone, -4)
+        return mb_strlen($phone) >= 7
+            ? Clip::chars($phone, 3) . '****' . Clip::tail($phone, 4)
             : '****';
     }
 
@@ -28,14 +28,15 @@ final class Mask
             return '****';
         }
 
-        return $email[0] . '***' . substr($email, $pos);
+        // 首字符取一个**字符**而不是一个字节：中文邮箱前缀是库里的脏数据也有的。
+        return Clip::chars($email, 1) . '***' . substr($email, $pos);
     }
 
     /** 身份证：110101********1234（留首6末4） */
     public static function idCard(string $id): string
     {
-        return strlen($id) >= 10
-            ? substr($id, 0, 6) . '********' . substr($id, -4)
+        return mb_strlen($id) >= 10
+            ? Clip::chars($id, 6) . '********' . Clip::tail($id, 4)
             : '****';
     }
 
@@ -45,8 +46,7 @@ final class Mask
         if ($name === '') {
             return '';
         }
-        $first = mb_substr($name, 0, 1, 'UTF-8');
 
-        return $first . str_repeat('*', max(1, mb_strlen($name, 'UTF-8') - 1));
+        return Clip::chars($name, 1) . str_repeat('*', max(1, mb_strlen($name) - 1));
     }
 }

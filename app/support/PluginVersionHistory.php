@@ -12,11 +12,12 @@ use Kode\Framework\Plugin\PluginDiscoverer;
  *
  * 职责边界：
  *   - 记录（record）：写入一条版本变更
- *   - 查询（list / latest）：按插件名查历史
- *   - 回滚（rollback）：将 kode_plugins.version 回退到指定版本
+ *   - 查询（list / knownVersions）：按插件名查历史、查登记过的版本
+ *   - 改版本（changeVersion）：**唯一**派发口，改列 + 留痕一起做
+ *   - 回滚（rollback）：把登记版本回退到账本里出现过的某个值
  *
  * 不职责：
- *   - 执行代码级回滚（删除/恢复文件）——那是 PluginPackager 的事
+ *   - 执行代码级回滚（删除/恢复文件）——那是备份恢复（PluginBackupService）的事
  *   - 执行 migration 回退——那是框架 migrate:rollback 的事
  */
 final class PluginVersionHistory
@@ -72,35 +73,69 @@ final class PluginVersionHistory
     }
 
     /**
-     * 获取指定插件的上一版本（用于回滚目标定位）。
+     * 版本变更的唯一派发口：改 `kode_plugins.version` 与留历史轨迹必须同时发生。
      *
-     * @return string|null 上一个版本号
+     * 此前两者是分开的，于是「谁改了版本」取决于调用者记不记得再调一次 record()：
+     * 只有 `POST /api/plugins/{name}/upgrade` 记得，install、install-remote、备份恢复
+     * 三处都只改列不留痕。结果这张表看着是完整的账本，实际只记了四分之一的账 ——
+     * 而 rollback() 全建在这张表上。
+     *
+     * 只在版本**真的变了**时记账：同版本重复调用不该往账本里灌噪声行。
+     *
+     * @param string|null $from 变更前的登记版本。缺省时读 `kode_plugins`（调用方已把行
+     *                          建/改成目标值时必须显式传，否则「刚刚从没装过」会被读成
+     *                          「上一版就是默认值」—— install 走 setStatus 建表行，
+     *                          默认 version 恒为 1.0.0，不传就会记出一条假前置版本）。
      */
-    public static function previousVersion(string $name): ?string
-    {
-        $history = self::list($name, 10);
-        // 找到最近一条 upgrade 记录，其 from_version 即为可回滚目标
-        foreach ($history as $row) {
-            if (($row['operation'] ?? '') === self::OP_UPGRADE) {
-                return (string) $row['from_version'];
-            }
+    public static function changeVersion(
+        string $name,
+        string $version,
+        string $operation,
+        string $changelog = '',
+        string $operator = 'system',
+        array $detail = [],
+        ?string $from = null,
+    ): void {
+        $from ??= (string) (PluginMarket::states()[$name]['version'] ?? '');
+
+        PluginMarket::setVersion($name, $version);
+
+        if ($from !== $version) {
+            self::record($name, $from, $version, $operation, $changelog, $operator, $detail);
         }
-        // 没有 upgrade 记录，找 install 的 to_version 之前的版本（通常无）
-        foreach ($history as $row) {
-            if (($row['operation'] ?? '') === self::OP_INSTALL) {
-                return null; // 没有升级历史，无法回滚
-            }
-        }
-        return null;
     }
 
     /**
-     * 回滚到指定版本（仅更新 kode_plugins.version，不执行代码级回滚）。
+     * 该插件登记过的版本（新→旧，去重，不含当前版本）。
+     *
+     * @return list<string>
+     */
+    public static function knownVersions(string $name, ?string $exclude = null): array
+    {
+        $out = [];
+        foreach (self::list($name, 50) as $row) {
+            foreach ([(string) ($row['to_version'] ?? ''), (string) ($row['from_version'] ?? '')] as $v) {
+                if ($v !== '' && $v !== $exclude && !in_array($v, $out, true)) {
+                    $out[] = $v;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * 回滚到指定版本（只回退**登记**的版本号，不执行代码级回滚）。
+     *
+     * 目标版本必须是该插件账本里出现过的：不校验的话，`target=9.9.9` 这种手抖会把
+     * `kode_plugins.version` 改成一个从没存在过的版本号，而磁盘代码没动 —— 版本自述面
+     * 从此长期说谎，且下一轮 upgrade 会拿它当 `$from` 做 `version_compare`（把不存在的
+     * 版本算成「可升级」）。真正的换代码是备份恢复（`POST /api/plugins/backup/restore`）。
      *
      * @param string $name    插件名
      * @param string $target  目标版本
      * @param string $operator 操作者
-     * @return array{ok: bool, message: string, version: string}
+     * @return array{ok: bool, message: string, version: string, candidates?: list<string>}
      */
     public static function rollback(string $name, string $target, string $operator = 'system'): array
     {
@@ -114,20 +149,28 @@ final class PluginVersionHistory
             return ['ok' => false, 'message' => '当前已是目标版本', 'version' => $currentVersion];
         }
 
-        // 更新 kode_plugins.version
-        Db::update(
-            'UPDATE kode_plugins SET version = ?, updated_at = NOW() WHERE name = ?',
-            [$target, $name]
-        );
+        $candidates = self::knownVersions($name, $currentVersion);
+        if (!in_array($target, $candidates, true)) {
+            return [
+                'ok' => false,
+                'message' => "v{$target} 不是该插件登记过的版本，可回滚目标："
+                    . ($candidates === [] ? '无（该插件还没有版本历史，换代码请走备份恢复）' : implode(', ', $candidates)),
+                'version' => $currentVersion,
+                'candidates' => $candidates,
+            ];
+        }
 
-        // 记录回滚
-        self::record($name, $currentVersion, $target, self::OP_ROLLBACK, '', $operator, [
+        self::changeVersion($name, $target, self::OP_ROLLBACK, '', $operator, [
             'current' => $currentVersion,
         ]);
 
-        PluginMarket::forgetStatusCache($name);
-
-        return ['ok' => true, 'message' => "已回滚至 v{$target}", 'version' => $target];
+        return [
+            'ok' => true,
+            'message' => "登记版本已回退至 v{$target}（只改了版本登记，插件代码未变；"
+                . '要换回代码请走「备份恢复」）',
+            'version' => $target,
+            'candidates' => $candidates,
+        ];
     }
 
     /**

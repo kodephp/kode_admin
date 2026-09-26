@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Kode\Plugins;
 
-use app\admin\http\middleware\RequirePerm;
+use app\admin\middleware\RequirePerm;
 use Kode\Framework\Http\Middleware\AuthMiddleware;
 use Kode\Framework\Plugin\PluginInterface;
 use Kode\Framework\Plugin\PluginManager;
@@ -28,7 +28,7 @@ final class NoticePlugin implements PluginInterface
 
     public function version(): string
     {
-        return '1.0.0';
+        return '1.1.0';
     }
 
     /** @return list<string> 插件所属表（备份提醒 + purge 清理依据） */
@@ -45,11 +45,20 @@ final class NoticePlugin implements PluginInterface
                 id BIGSERIAL PRIMARY KEY,
                 title VARCHAR(128) NOT NULL,
                 body TEXT NOT NULL,
+                type VARCHAR(24) NOT NULL DEFAULT \'announcement\',
                 status SMALLINT NOT NULL DEFAULT 1,
                 created_by VARCHAR(64) NOT NULL DEFAULT \'\',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )'
+        );
+        // 幂等：分库表也带 type 列
+        \Kode\Database\Db\Db::statement(
+            "ALTER TABLE kode_notices ADD COLUMN IF NOT EXISTS type VARCHAR(24) NOT NULL DEFAULT 'announcement'"
+        );
+        // 常用查询加速
+        \Kode\Database\Db\Db::statement(
+            "CREATE INDEX IF NOT EXISTS idx_kode_notices_type_status ON kode_notices (type, status)"
         );
     }
 
@@ -69,9 +78,38 @@ final class NoticePlugin implements PluginInterface
         }
     }
 
-    /** 升级钩子（按版本差执行增量变更，幂等）。 */
+    /**
+     * 升级钩子（按版本差执行增量变更，幂等）。
+     *
+     * - v1.0.0 → v1.1.0：给 kode_notices 加 type 列（公告/内部通知 双类型）
+     */
     public function upgrade(string $from, string $to): void
     {
+        $db = \Kode\Database\Db\Db::class;
+        $db::statement(
+            "ALTER TABLE kode_notices ADD COLUMN IF NOT EXISTS type VARCHAR(24) NOT NULL DEFAULT 'announcement'"
+        );
+        $db::statement(
+            "CREATE INDEX IF NOT EXISTS idx_kode_notices_type_status ON kode_notices (type, status)"
+        );
+        // 分片表也同步
+        try {
+            $cfg = (array) config('sharding', []);
+            for ($d = 0; $d < max(1, (int) ($cfg['db_count'] ?? 2)); $d++) {
+                for ($t = 0; $t < max(1, (int) ($cfg['table_shards'] ?? 2)); $t++) {
+                    $table = sprintf('kode_notices_%02d', $t);
+                    try {
+                        \Kode\Database\Db\Db::connection(sprintf('shard_%02d', $d))->statement(
+                            "ALTER TABLE {$table} ADD COLUMN IF NOT EXISTS type VARCHAR(24) NOT NULL DEFAULT 'announcement'"
+                        );
+                    } catch (\Throwable) {
+                        // 表不存在或分片库未初始化，忽略
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // 分片未启用，忽略
+        }
     }
 
     public function register(PluginManager $manager): void
@@ -118,7 +156,10 @@ final class NoticePlugin implements PluginInterface
     public function menus(): array
     {
         return [
-            ['title' => '公告管理', 'path' => '/notices', 'icon' => 'notification', 'auth_code' => 'notices:view', 'parent' => '/cms'],
+            // 统一通知中心：公告 + 系统广播 双 Tab 视图（推荐入口）
+            ['title' => '通知中心', 'path' => '/notice-center', 'icon' => 'notification', 'auth_code' => 'notices:view', 'parent' => '/cms'],
+            // 兼容旧入口：单独的公告管理
+            ['title' => '公告管理', 'path' => '/notices', 'icon' => 'file-text', 'auth_code' => 'notices:view', 'parent' => '/cms'],
         ];
     }
 }

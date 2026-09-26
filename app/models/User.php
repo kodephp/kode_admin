@@ -117,7 +117,7 @@ class User
 
     public function setAvatar(string $avatar): static
     {
-        $this->avatar = substr($avatar, 0, 512);
+        $this->avatar = \app\support\Clip::chars($avatar, 512);
 
         return $this;
     }
@@ -129,7 +129,7 @@ class User
 
     public function setRemark(string $remark): static
     {
-        $this->remark = substr($remark, 0, 255);
+        $this->remark = \app\support\Clip::chars($remark, 255);
 
         return $this;
     }

@@ -43,7 +43,7 @@ final class DoctrineServiceProvider extends ServiceProvider
                 $proxyDir = rtrim((string) $this->config('path.base', ''), '/') . '/storage/doctrine/proxies';
             }
             if (!is_dir($proxyDir)) {
-                @mkdir($proxyDir, 0777, true);
+                @mkdir($proxyDir, 0775, true);
             }
             $ormConfig->setProxyDir($proxyDir);
             $ormConfig->setAutoGenerateProxyClasses($dev);

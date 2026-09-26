@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests;
 
-use app\admin\http\middleware\RequirePerm;
+use app\admin\middleware\RequirePerm;
 use app\support\PluginContract;
 use Kode\Framework\Plugin\PluginInterface;
 use Kode\Framework\Plugin\PluginManager;
@@ -118,9 +118,9 @@ final class GateUnfulfilledPlugin implements PluginInterface
 }
 
 /**
- * 门禁码由本插件 permissions() 声明（跨插件复用同一码亦合法）→ 零漂移。
- * 复用 notices:view 而非自造新码：allDeclaredPerms() 的比对基准是
- * PluginMarket::discover() 的结果，内联夹具不在其中。
+ * 门禁码在授予面里（`PermCatalog::codes()`）→ 零漂移。
+ * 复用 notices:view 而非自造新码：本夹具不写进 kode_menus、也不进 discover() 的
+ * 插件清单，只有已被真实菜单承载的码才能保证两条面都查得到它。
  */
 final class GateFulfilledPlugin implements PluginInterface
 {

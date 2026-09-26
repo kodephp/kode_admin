@@ -8,6 +8,7 @@ use app\models\User;
 use app\repositories\UserRepository;
 use app\support\HashId;
 use Kode\Database\Db\Db;
+use Kode\Event\Dispatcher;
 
 /**
  * 用户域服务（四层架构的 Service 层范例）。
@@ -22,9 +23,19 @@ final class UserService
     }
 
     /** @return list<array<string, mixed>> */
-    public function list(int $page, int $size, string $search = '', int $deptId = 0, ?int $status = null, string $start = '', string $end = '', int $id = 0, string $remark = ''): array
+    public function list(int $offset, int $size, string $search = '', int $deptId = 0, ?int $status = null, string $start = '', string $end = '', int $id = 0, string $remark = ''): array
     {
-        $users = $this->users->page($page, $size, $search, $deptId, $status, $start, $end, $id, $remark);
+        $users = $this->users->page(
+            offset: $offset,
+            size: $size,
+            search: $search,
+            deptId: $deptId,
+            status: $status,
+            start: $start,
+            end: $end,
+            id: $id,
+            remark: $remark
+        );
         $ids = array_map(static fn(User $u): int => (int) $u->getId(), $users);
         $rolesByUser = [];
         $deptNames = [];
@@ -44,7 +55,7 @@ final class UserService
                 $t = $r['t'];
                 $lastLogin[(int) $r['user_id']] = $t instanceof \DateTimeInterface
                     ? $t->format('Y-m-d H:i:s')
-                    : substr((string) $t, 0, 19);
+                    : \app\support\Clip::chars((string) $t, 19);
             }
             $deptIds = array_values(array_unique(array_filter(
                 array_map(static fn(User $u): int => $u->getDeptId(), $users),
@@ -91,6 +102,18 @@ final class UserService
             ->setRemark($remark);
         $this->users->save($user);
 
+        // 派发用户创建事件（钱包/通知等插件可监听此事件自动开户/发通知）
+        try {
+            resolve(Dispatcher::class)->dispatch('user.created', [
+                'user_id' => (int) $user->getId(),
+                'name' => $name,
+                'email' => $email,
+                'dept_id' => $deptId,
+            ]);
+        } catch (\Throwable) {
+            // 事件派发失败不阻断用户创建
+        }
+
         return $user;
     }
 
@@ -115,6 +138,7 @@ final class UserService
             throw new \RuntimeException('初始超管账号不可删除', 403);
         }
         $user = $this->mustFind($id);
+        $this->invalidateSessions($id);
         Db::delete('DELETE FROM kode_role_user WHERE user_id = ?', [$id]);
         $this->users->remove($user);
     }
@@ -140,6 +164,8 @@ final class UserService
     /** 批量分配角色（覆盖式）。 */
     public function batchAssignRoles(array $ids, array $roles): int
     {
+        // 整批先校验：放在循环里的话每人抛一次错、被下面的 catch 吞掉，done=0 照样回 200
+        $roles = $this->assertRolesExist($roles);
         $done = 0;
         foreach (array_unique(array_map('intval', $ids)) as $id) {
             if ($id <= 0) {
@@ -158,12 +184,36 @@ final class UserService
     public function assignRoles(int $id, array $roles): array
     {
         $this->mustFind($id);
+        $roles = $this->assertRolesExist($roles);
         Db::delete('DELETE FROM kode_role_user WHERE user_id = ?', [$id]);
         foreach ($roles as $slug) {
             Db::insert('INSERT INTO kode_role_user (user_id, role_slug) VALUES (?, ?)', [$id, (string) $slug]);
         }
+        // 角色写在 JWT 载荷里、RequireRole 只读载荷不查库：不撤销的话，「降权」要等到令牌自然过期才生效
+        $this->invalidateSessions($id);
 
         return array_values($roles);
+    }
+
+    /**
+     * 撤销「当前挂着某角色」的全部账号会话，返回撤销人数。
+     *
+     * 角色被禁用/删除时必调：slug 铸在 JWT 载荷里，`RequireRole` 只读载荷不查库，
+     * 不撤销的话这些成员要等到令牌自然过期才掉权限。
+     * 挂着孤儿授权（用户已删）的行跳过即可，不该让角色页因此 500。
+     */
+    public function invalidateSessionsByRole(string $slug): int
+    {
+        $done = 0;
+        foreach (Db::select('SELECT user_id FROM kode_role_user WHERE role_slug = ?', [$slug]) as $row) {
+            try {
+                $this->invalidateSessions((int) $row['user_id']);
+                $done++;
+            } catch (\Throwable) {
+            }
+        }
+
+        return $done;
     }
 
     public function toggleStatus(int $id): User
@@ -172,7 +222,12 @@ final class UserService
             throw new \RuntimeException('初始超管账号不可禁用', 403);
         }
         $user = $this->mustFind($id);
-        $this->users->save($user->setStatus($user->getStatus() === 1 ? 0 : 1));
+        $wasDisabled = $user->getStatus() !== 1;
+        $this->users->save($user->setStatus($wasDisabled ? 1 : 0));
+        // 禁用只在登录口拦（403），在发令牌照跑：撤销后「禁用即下线」才是真的
+        if (!$wasDisabled) {
+            $this->invalidateSessions($id);
+        }
 
         return $user;
     }
@@ -180,9 +235,52 @@ final class UserService
     public function resetPassword(int $id, string $password): User
     {
         $user = $this->mustFind($id);
+        // 重置密码的动机通常是「这个账号可能被人用了」。只换密码不作废令牌，
+        // 被接管的那把会话照跑不误，处置动作等于被静默吞掉（撤销放在落库前，失败可重试）。
+        $this->invalidateSessions($id);
         $this->users->save($user->setPassword(password_hash($password, PASSWORD_DEFAULT)));
 
         return $user;
+    }
+
+    /**
+     * 角色必须真实存在：`kode_role_user.role_slug` 没有外键，拼错的名字照样写得进去、
+     * 既不报错也不授权，界面回显「已分配」而实际权限为空 —— 授权类操作里最坏的静默失败。
+     * 空数组是合法语义（清空角色），原样返回。
+     *
+     * @param array<array-key, mixed> $roles
+     * @return list<string>
+     */
+    private function assertRolesExist(array $roles): array
+    {
+        $slugs = array_values(array_unique(array_map(
+            static fn($role): string => trim((string) $role),
+            $roles
+        )));
+        if ($slugs === []) {
+            return [];
+        }
+
+        $holders = implode(',', array_fill(0, count($slugs), '?'));
+        $known = array_column(
+            Db::select("SELECT slug FROM kode_roles WHERE slug IN ({$holders})", $slugs),
+            'slug'
+        );
+        $missing = array_values(array_diff($slugs, $known));
+        if ($missing !== []) {
+            throw new \RuntimeException('角色不存在：' . implode(', ', $missing), 400);
+        }
+
+        return $slugs;
+    }
+
+    /**
+     * 撤销某用户全部在发令牌：登录态安全字段（角色/状态/口令/账号本身）改动后必须即时失效，
+     * 因为鉴权只验签、不回查库。调用方按 401 重登（前端已有该处理）。
+     */
+    private function invalidateSessions(int $id): void
+    {
+        resolve(\app\auth\EncryptedJwtGuard::class)->revokeUserTokens($id);
     }
 
     public function eid(User $user): string

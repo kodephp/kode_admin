@@ -7,7 +7,7 @@
 ## 1. 分层与依赖方向
 
 ```
-Controller（app/<应用>/http/controllers/）
+Controller（app/<应用>/controllers/）
   收参/校验/调服务/包信封，零业务规则，零 SQL
     ↓
 Service（app/services/，如 UserService）
@@ -22,6 +22,11 @@ Model（app/models/，Doctrine 实体）
 
 - 依赖只向下；跨模块调用走 Service（同应用）或事件（跨插件），禁止 Controller 直调他模块 Service。
 - Service 方法是事务边界候选（单库事务直接包，跨片走 `Saga::run()`）。
+- **落地进度要如实说**：上面这张四层图目前只有 `用户` 一个聚合走通（`app/models/User.php` +
+  `app/repositories/UserRepository.php`）。45 张 `kode_*` 表里其余 44 张没有实体，
+  47 个控制器文件里 38 个直接调 `Db::`。所以本图是**目标形状**，不是现状快照 ——
+  写新代码按 AGENTS §1 的 ORM 口径办（业务规则进 Service，持久化在 Service 里用 `Db::` + 绑定参数，
+  要迁 ORM 就整块迁，别在一个 Service 里一半实体一半裸 SQL）。
 
 ## 2. DDD 战术映射
 

@@ -32,19 +32,24 @@ final class UserRepository
         return $this->em->getRepository(User::class)->findOneBy(['email' => $email]);
     }
 
-    /** @return list<User> */
-    public function page(int $page, int $size, string $search = '', int $deptId = 0, ?int $status = null, string $start = '', string $end = '', int $id = 0, string $remark = ''): array
+    /**
+     * 一页用户。窗口由入口的 `PageWindow` 判定，这里只收 `offset`：
+     * 仓储层不知道「第几页」，也就没有第二处 `($page-1)*$size` 会溢出。
+     *
+     * @return list<User>
+     */
+    public function page(int $offset, int $size, string $search = '', int $deptId = 0, ?int $status = null, string $start = '', string $end = '', int $id = 0, string $remark = ''): array
     {
         if (trim($search) === '' && $deptId <= 0 && $status === null && $start === '' && $end === '' && $id <= 0 && trim($remark) === '') {
             /** @var list<User> */
-            return $this->em->getRepository(User::class)->findBy([], ['id' => 'ASC'], $size, ($page - 1) * $size);
+            return $this->em->getRepository(User::class)->findBy([], ['id' => 'ASC'], $size, $offset);
         }
         $qb = $this->em->createQueryBuilder()
             ->select('u')
             ->from(User::class, 'u')
             ->orderBy('u.id', 'ASC')
             ->setMaxResults($size)
-            ->setFirstResult(($page - 1) * $size);
+            ->setFirstResult($offset);
         $this->applyFilters($qb, $search, $deptId, $status, $start, $end, $id, $remark);
 
         /** @var list<User> */

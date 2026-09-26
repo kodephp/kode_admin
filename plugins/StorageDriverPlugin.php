@@ -22,6 +22,7 @@ use Kode\Database\Db\Db;
  *  - drivers()：向平台声明本插件提供的存储驱动键；
  *  - permissions()：声明权限码（菜单声明时审计校验 auth_code 已声明）；
  *  - menus()：本插件为空——纯组件插件不声明页面（见方法注释）；
+ *  - events()：声明本插件监听 storage_driver_resolve（核心推送媒体时回调驱动）；
  *  - requires()：声明依赖（本例无）。
  *
  * 接入核心：驱动被登记后，StorageManager::transfer() 不再返回「需先部署 SDK」，
@@ -152,10 +153,26 @@ final class StorageDriverPlugin implements PluginInterface
         return [];
     }
 
+    /**
+     * 事件声明（契约语义：本插件**监听**哪些事件）。
+     *
+     * 声明即须兑现——register() 里对应有一条 addListener()，否则事件派发时
+     * 本插件收不到（PluginContract::auditEvents 会判漂移）。用常量而非字面量，
+     * 保证与 StorageManager 派发侧共用同一真值源。
+     *
+     * @return array<string, array{0: class-string, 1: string}> 事件名 => 监听器
+     */
+    public function events(): array
+    {
+        return [
+            StorageManager::REMOTE_RESOLVE_EVENT => [self::class, 'resolve'],
+        ];
+    }
+
     public function register(PluginManager $manager): void
     {
         // 组件插件不注册前端页面路由，仅注册事件：核心推送媒体时回调插件驱动。
-        $manager->addListener('storage_driver_resolve', [self::class, 'resolve']);
+        $manager->addListener(StorageManager::REMOTE_RESOLVE_EVENT, [self::class, 'resolve']);
     }
 
     public function boot(PluginManager $manager): void

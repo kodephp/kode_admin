@@ -6,6 +6,7 @@ namespace Kode\Plugins;
 
 use Kode\Framework\Plugin\PluginInterface;
 use Kode\Framework\Plugin\PluginManager;
+use Kode\Plugins\demo\DemoService;
 
 /**
  * 示例插件（演示插件机制）

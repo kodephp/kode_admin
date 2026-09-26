@@ -147,6 +147,29 @@ final class EncryptedJwtGuard implements AuthGuard
         return $this->inner->unblacklist($jti, $guard);
     }
 
+    /**
+     * 强制下线：撤销某用户的全部令牌，返回撤销条数。
+     *
+     * 令牌里落地的是 `u_` 不透明 uid，用户活跃 Token 列表的键也由它拼成
+     * （`user:u_xxx:web:tokens`）。直接把数据库自增 id 传进去只会查到一把不存在的键，
+     * 撤销恒返回 0 且毫无报错——所以这里负责把内部 id 换成外层串。
+     *
+     * @param int|string $uid      内部自增 id，或已是外层不透明串
+     * @param string|null $platform 限定平台；null 表示 config(jwt.platforms) 里的全部平台
+     *
+     * @throws \InvalidArgumentException uid 两种形态都对不上时（宁可报错也不要静默返回 0）
+     */
+    public function revokeUserTokens(int|string $uid, ?string $platform = null, string $guard = 'api'): int
+    {
+        $outer = match (true) {
+            is_int($uid), ctype_digit($uid) => self::outerUid((int) $uid),
+            str_starts_with($uid, 'u_') => $uid,
+            default => throw new \InvalidArgumentException('无法识别的用户标识，拒绝撤销（避免空转返回 0）'),
+        };
+
+        return $this->inner->revokeUserTokens($outer, $platform, $guard);
+    }
+
     private function encKey(string $secret): string
     {
         return hash_hkdf('sha256', $secret, 32, 'kode-jwt-enc-v1');

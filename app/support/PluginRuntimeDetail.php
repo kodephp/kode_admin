@@ -57,7 +57,7 @@ final class PluginRuntimeDetail
     {
         $expected = "plugin:{$name}";
         try {
-            $app = resolve(\Kode\Http\AppData::class);
+            $app = resolve(\Kode\Http\App::class);
             $registry = resolve(\Kode\Framework\Http\RouteRegistry::class);
 
             $routes = [];
@@ -101,7 +101,7 @@ final class PluginRuntimeDetail
             foreach ($declared as $eventName => $listeners) {
                 $events[] = [
                     'event'      => (string) $eventName,
-                    'listeners'  => is_array($listeners) ? array_map('is_string', $listeners) : [is_string($listeners) ? $listeners : get_class($listeners)],
+                    'listeners'  => self::listenerLabels($listeners),
                     'registered' => $dispatcher->hasListeners($eventName),
                 ];
             }
@@ -113,7 +113,69 @@ final class PluginRuntimeDetail
     }
 
     /**
+     * events() 声明值 → 可读监听器标签列表。
+     *
+     * 契约允许的形态与 config/event.php 的 listeners 一致：闭包 / 类名 /
+     * [类, 方法] / 描述性 map。前端「监听器」列是逐项渲染字符串的，
+     * 因此这里必须产出字符串——旧实现 `array_map('is_string', $listeners)`
+     * 产出的是布尔数组，页面只能显示 true/false，等于把声明信息全丢了。
+     *
+     * @return list<string>
+     */
+    private static function listenerLabels(mixed $listeners): array
+    {
+        if (!is_array($listeners)) {
+            return [self::listenerLabel($listeners)];
+        }
+
+        // [类, 方法] 元组整体是一个监听器，不能拆成两个标签。
+        if (array_is_list($listeners) && count($listeners) === 2
+            && is_string($listeners[0]) && is_string($listeners[1])
+            && (class_exists($listeners[0]) || interface_exists($listeners[0]))) {
+            return [$listeners[0] . '::' . $listeners[1]];
+        }
+
+        // 描述性 map（['desc' => …]）：取其中的可读描述。
+        if (!array_is_list($listeners)) {
+            $desc = $listeners['desc'] ?? $listeners['label'] ?? null;
+
+            return is_string($desc) ? [$desc] : [];
+        }
+
+        // 监听器列表：逐项渲染，丢弃无法识别的空标签。
+        $out = [];
+        foreach ($listeners as $item) {
+            $out[] = self::listenerLabel($item);
+        }
+
+        return array_values(array_filter($out, static fn (string $s): bool => $s !== ''));
+    }
+
+    /** 单个监听器 → 可读标签（无法识别返回空串，由调用方过滤）。 */
+    private static function listenerLabel(mixed $item): string
+    {
+        if (is_string($item)) {
+            return $item;
+        }
+        if ($item instanceof \Closure) {
+            return 'Closure';
+        }
+        if (is_object($item)) {
+            return $item::class;
+        }
+        if (is_array($item) && is_string($item[0] ?? null) && is_string($item[1] ?? null)) {
+            return $item[0] . '::' . $item[1];
+        }
+
+        return '';
+    }
+
+    /**
      * 定时任务详情：调度器中注册的任务（含表达式、描述、启用状态）。
+     *
+     * 取 bySource()：ScheduleDispatcher 没有 tasks()（那是 Scheduler 的方法），
+     * 旧写法在 foreach 处抛 \Error，被下面的 catch 吞成空数组——定时任务 tab
+     * 因此和「这个插件真的没有任务」长得一模一样。
      */
     private static function crons(string $name): array
     {
@@ -122,15 +184,13 @@ final class PluginRuntimeDetail
             $dispatcher = resolve(\Kode\Framework\Scheduling\ScheduleDispatcher::class);
 
             $tasks = [];
-            foreach ($dispatcher->tasks() as $task) {
-                if (($task->source ?? '') === $expected) {
-                    $tasks[] = [
-                        'name'        => $task->name,
-                        'expression'  => $task->expression ?? '',
-                        'description' => $task->description ?? '',
-                        'enabled'     => $task->enabled ?? true,
-                    ];
-                }
+            foreach ($dispatcher->bySource($expected) as $task) {
+                $tasks[] = [
+                    'name'        => $task->name,
+                    'expression'  => $task->expression,
+                    'description' => $task->description ?? '',
+                    'enabled'     => $task->enabled,
+                ];
             }
 
             usort($tasks, static fn (array $a, array $b) => strcmp($a['name'], $b['name']));

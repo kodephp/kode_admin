@@ -12,14 +12,14 @@
 use Kode\Framework\Facades\Event;
 
 // 插件运行时门禁挂最外层：暂停/卸载插件的路由直接 404，不消耗鉴权与业务资源。
-$app->http()->getDispatcher()->prepend(new \app\http\middleware\PluginGateMiddleware());
+$app->http()->getDispatcher()->prepend(new \app\middleware\PluginGateMiddleware());
 
 // Doctrine UnitOfWork 收口中间件（全局最内层，不干扰既有顺序）。
-$app->http()->use(new \app\http\middleware\DoctrineClearMiddleware());
+$app->http()->use(new \app\middleware\DoctrineClearMiddleware());
 
 // 计时中间件挂内层（异常中间件之后）：打 _t0 + 校验错误信封化。
 // 必须在 ExceptionMiddleware 内侧，否则校验异常先被它接走，信封化够不着。
-$app->http()->use(new \app\http\middleware\TimingMiddleware());
+$app->http()->use(new \app\middleware\TimingMiddleware());
 
 // 读写分离：SELECT 走读库，写走主库（配置 database.read_write_split）。
 try {
@@ -35,20 +35,23 @@ try {
     if (!empty($shardCfg['enabled'])) {
         $dbCount = max(1, (int) ($shardCfg['db_count'] ?? 2));
         $hosts = array_values(array_filter(array_map('trim', explode(',', (string) ($shardCfg['db_hosts'] ?? '')))));
+        // 凭证沿用主库那份配置：分片连接不该有独立的账号口径，更不该在这里写死角色名
+        // （AGENTS：无任何写死的账号依赖，属主即连接账号）。
+        $main = (array) config('database.connections.pgsql', []);
         $base = [
-            'driver' => 'pgsql',
-            'port' => (int) env('DB_PORT', 5432),
-            'username' => env('DB_USERNAME', 'root'),
-            'password' => env('DB_PASSWORD', ''),
-            'charset' => 'utf8',
+            'driver' => (string) ($main['driver'] ?? 'pgsql'),
+            'port' => (int) ($main['port'] ?? 5432),
+            'username' => (string) ($main['username'] ?? ''),
+            'password' => (string) ($main['password'] ?? ''),
+            'charset' => (string) ($main['charset'] ?? 'utf8'),
             'prefix' => '',
         ];
         for ($i = 0; $i < $dbCount; $i++) {
             $name = sprintf('shard_%02d', $i);
-            $cfg = $base + [
+            $cfg = array_merge($base, [
                 'host' => $hosts[$i] ?? $hosts[0] ?? env('DB_HOST', '127.0.0.1'),
                 'database' => sprintf((string) ($shardCfg['db_name'] ?? 'kode_app_%02d'), $i),
-            ];
+            ]);
             \Kode\Database\Db\Db::addConnection($name, $cfg);
         }
     }
@@ -56,7 +59,7 @@ try {
 }
 
 // 操作审计（只记元数据，见 AuditMiddleware）。
-$app->http()->use(new \app\http\middleware\AuditMiddleware());
+$app->http()->use(new \app\middleware\AuditMiddleware());
 
 // 安全自检：admin 仍是初始密码则告警（启动期一次，不阻断）。
 try {

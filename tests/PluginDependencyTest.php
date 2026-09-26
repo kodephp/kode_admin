@@ -7,6 +7,7 @@ namespace app\tests;
 use app\support\PluginContract;
 use app\support\PluginDependency;
 use app\support\PluginMarket;
+use Kode\Database\Db\Db;
 use Kode\Framework\Plugin\PluginInterface;
 use PHPUnit\Framework\TestCase;
 
@@ -30,6 +31,9 @@ final class PluginDependencyTest extends TestCase
     /** @var list<string> 本测试创建的临时插件文件路径 */
     private array $tempFiles = [];
 
+    /** @var list<string> 本测试创建的临时插件名（setStatus/setVersion 会往 kode_plugins 落行） */
+    private array $tempPluginNames = [];
+
     protected function setUp(): void
     {
         \Kode\Framework\Application::make(dirname(__DIR__));
@@ -37,6 +41,17 @@ final class PluginDependencyTest extends TestCase
 
     protected function tearDown(): void
     {
+        // setStatus/setVersion 会真插 kode_plugins 行；只删临时文件的话，
+        // dep_pause_b/dep_ver_b 这类假插件会永久留在开发库里（本次修复的起因）。
+        foreach ($this->tempPluginNames as $name) {
+            try {
+                Db::delete('DELETE FROM kode_plugins WHERE name = ?', [$name]);
+            } catch (\Throwable) {
+            }
+            PluginMarket::forgetStatusCache($name);
+        }
+        $this->tempPluginNames = [];
+
         foreach ($this->tempFiles as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -77,6 +92,7 @@ final class {$className} implements PluginInterface
 PHP;
         file_put_contents($path, $code);
         $this->tempFiles[] = $path;
+        $this->tempPluginNames[] = $pluginName;
 
         return $pluginName;
     }

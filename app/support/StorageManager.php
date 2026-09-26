@@ -48,7 +48,7 @@ final class StorageManager
     /** 媒体登记（上传入口调用），返回注册 ID。 */
     public static function register(string $name, string $path, int $diskId = 0, string $owner = ''): int
     {
-        $abs = base_path('storage/' . ltrim($path, '/'));
+        $abs = self::localPath($path);
         $mime = is_file($abs) ? (string) (mime_content_type($abs) ?: 'application/octet-stream') : '';
         $size = is_file($abs) ? (int) filesize($abs) : 0;
         $width = 0;
@@ -72,7 +72,7 @@ final class StorageManager
 
         return (int) Db::insert(
             'INSERT INTO kode_media (name, path, mime, size, width, height, disk_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())',
-            [$name, $path, $mime, $size, $width, $height, $diskId, substr($owner, 0, 64)]
+            [$name, $path, $mime, $size, $width, $height, $diskId, Clip::chars($owner, 64)]
         );
     }
 
@@ -92,7 +92,7 @@ final class StorageManager
         $path = (string) $rows[0]['path'];
         $disk = self::disk((int) $rows[0]['disk_id']);
         if ($disk['driver'] !== 'local') {
-            $remote = self::remoteUrl($disk, $path);
+            $remote = self::remoteObjectUrl($disk, self::remoteObjectKey($disk, $path));
             if ($remote !== '') {
                 return $remote;
             }
@@ -133,17 +133,24 @@ final class StorageManager
     /**
      * 推送单个媒体到远程盘：派发 storage_driver_resolve，由已注册的插件驱动完成真实上传。
      *
-     * 契约（与 StorageDriverPlugin 对齐）：
-     *  - 派发入参：driver / path / disk / id；
+     * 契约（与 StorageDriverPlugin / FlysystemStoragePlugin 对齐）：
+     *  - 派发入参：driver / path / key / disk / id；
+     *    `path` 恒为**绝对**本地路径（驱动只做 is_file + read，不该按进程 CWD 猜落点），
+     *    `key`  恒为**完整**远程对象键（prefix 已含且只出现一次），
+     *    `id` 是**媒体** id（disk 内的 `id` 是盘 id，两者不同名不同义）；
+     *  - `disk` 恒为**平铺**形态：endpoint/bucket/ak/sk/prefix 直接挂在顶层，不再嵌在 `config` 里；
      *  - 驱动通过 $event->set('pushed', true) + $event->set('url', ...) 回报结果，
      *    失败用 $event->set('pushed', false) + $event->set('msg', ...)；
      *  - 本方法绝不自行拼 URL 假装推送成功；无监听者 / 驱动抛错都如实返回 ok=false。
      *
+     * @param string|null $key 覆盖对象键（连通性探针用）；null = 由 $path 推导
+     *
      * @return array{id: int, ok: bool, msg: string, url: string}
      */
-    public static function pushRemote(array $disk, string $path, int $mediaId): array
+    public static function pushRemote(array $disk, string $path, int $mediaId, ?string $key = null): array
     {
         $driver = (string) $disk['driver'];
+        $disk = self::flattenDisk($disk);
         try {
             if (!Event::hasListeners(self::REMOTE_RESOLVE_EVENT)) {
                 return [
@@ -155,7 +162,8 @@ final class StorageManager
             }
             $event = Event::dispatch(self::REMOTE_RESOLVE_EVENT, [
                 'driver' => $driver,
-                'path'   => $path,
+                'path'   => self::localPath($path),
+                'key'    => $key ?? self::remoteObjectKey($disk, $path),
                 'disk'   => $disk,
                 'id'     => $mediaId,
             ]);
@@ -188,17 +196,76 @@ final class StorageManager
         }
     }
 
-    private static function remoteUrl(array $disk, string $path): string
+    /**
+     * 派发载荷归一：`disk()` 的嵌套形态（`{id, driver, config:{…}}`）→ 平铺形态。
+     *
+     * 为什么必须归一：`transfer()` 传的是 `disk()` 原样，`StorageController::test()`
+     * 传的是自己 `array_merge` 平铺过的，而插件驱动读的是 `$disk['endpoint']` 这类顶层键。
+     * 两种形状并存的结果是「连通性测试通过、批量转移必失败」——同一份配置，两条路径，
+     * 只有一条真的能用。顶层的 `id`/`driver` 恒以记录本身为准，只把 config 的键提上来。
+     *
+     * 本方法对 `flattenDisk` 的下游（派发、算键、算 URL）都是同一份平铺形态。
+     *
+     * @param array<string, mixed> $disk
+     * @return array<string, mixed>
+     */
+    public static function flattenDisk(array $disk): array
     {
-        $cfg = $disk['config'];
-        $endpoint = rtrim((string) ($cfg['endpoint'] ?? ''), '/');
-        $bucket = trim((string) ($cfg['bucket'] ?? ''), '/');
-        $prefix = trim((string) ($cfg['prefix'] ?? ''), '/');
-        if ($endpoint === '' || $bucket === '') {
+        if (!isset($disk['config']) || !is_array($disk['config'])) {
+            return $disk;
+        }
+        $config = $disk['config'];
+        unset($disk['config']);
+
+        return array_merge($config, $disk);
+    }
+
+    /**
+     * 媒体相对路径 → 本地绝对路径。
+     *
+     * `kode_media.path` 存的是 `uploads/2026/09/x.png` 这种**相对 storage/** 的串。
+     * 此前 `pushRemote()` 把这串原样交给驱动，驱动 `is_file($path)` 按进程 CWD 解析——
+     * 守护进程的 CWD 实测是 `/`，于是远程推送永远报「源文件不存在」。
+     * 登记侧（register）与推送侧现在同走这一处。
+     */
+    public static function localPath(string $path): string
+    {
+        return str_starts_with($path, '/') ? $path : base_path('storage/' . ltrim($path, '/'));
+    }
+
+    /**
+     * 远程对象键：`{prefix}/{去掉 uploads/ 前缀的媒体路径}`，prefix 恰好出现一次。
+     *
+     * 这是**唯一**一处算键的地方——写侧（派发给驱动的 `key`）与读侧（`url()` 拼的展示地址）
+     * 必须同源。此前驱动自带一份 `{prefix}/{Y/m/d}/{mediaId}_{basename}`、适配器又挂了
+     * pathPrefix，对象实际落在 `prefix/prefix/…`，而展示侧按 path 算，两边永远对不上：
+     * transfer 成功后 disk_id 翻了，前端拿到的远程 URL 指向一个从未存在过的对象。
+     *
+     * 键由 path 推导而非随机名，是因为桶里必须能反查回 kode_media 行（path 唯一）。
+     */
+    public static function remoteObjectKey(array $disk, string $mediaPath): string
+    {
+        $flat = self::flattenDisk($disk);
+        $prefix = trim((string) ($flat['prefix'] ?? ''), '/');
+        $rel = str_starts_with($mediaPath, 'uploads/') ? substr($mediaPath, 8) : ltrim($mediaPath, '/');
+        $rel = ltrim($rel, '/');
+
+        return ($prefix === '' ? '' : $prefix . '/') . $rel;
+    }
+
+    /**
+     * 远程对象的访问 URL：`{endpoint}/{bucket}/{key}`；endpoint 或 bucket 缺失回空串
+     * （调用方据此回落本地地址，而不是拼出一个点开必 404 的半成品）。
+     */
+    public static function remoteObjectUrl(array $disk, string $key): string
+    {
+        $flat = self::flattenDisk($disk);
+        $endpoint = rtrim((string) ($flat['endpoint'] ?? ''), '/');
+        $bucket = trim((string) ($flat['bucket'] ?? ''), '/');
+        if ($endpoint === '' || $bucket === '' || $key === '') {
             return '';
         }
-        $key = ($prefix === '' ? '' : $prefix . '/') . substr($path, 8);
 
-        return "{$endpoint}/{$bucket}/{$key}";
+        return "{$endpoint}/{$bucket}/" . ltrim($key, '/');
     }
 }

@@ -10,23 +10,23 @@
 
 | 模块 | 说明 | 路径 |
 | --- | --- | --- |
-| 系统配置 | `.env` 不可变配置 + 运行时只读展示（`/api/system/configs`） | `app/admin/http/controllers/SystemController.php` |
-| 配置中心 | 运行时可变 KV 配置（`/api/configs`，DB 存储，支持分组/类型/写入） | `app/admin/http/controllers/ConfigController.php` |
-| 角色管理 | RBAC 角色 CRUD + 权限码授权（`/api/roles`） | `app/admin/http/controllers/RoleController.php` |
-| 菜单管理 | 动态路由 + 按钮级权限码（`/api/menus`） | `app/admin/http/controllers/MenuController.php` |
-| 用户管理 | 用户 CRUD + 角色分配 + 部门关联 | `app/admin/http/controllers/UserController.php` |
-| 部门管理 | 树形组织结构 | `app/admin/http/controllers/DeptController.php` |
-| 权限目录 | 按插件聚合权限码 + 按钮码（`/api/perms/catalog`） | `app/admin/http/controllers/PermsController.php` |
-| 插件管理 | 安装/卸载/升级/暂停 + 市场（`/api/plugins`） | `app/admin/http/controllers/PluginController.php` |
-| 操作审计 | 谁/方法/路径/状态/耗时/IP 元数据（禁止记请求体） | `app/admin/http/controllers/AuditController.php` |
-| 系统日志 | 框架级日志查看/清理（`/api/syslogs`） | `app/admin/http/controllers/SyslogController.php` |
-| 定时任务 | 任务调度 + 手动触发（`/api/schedules`） | `app/admin/http/controllers/ScheduleController.php` |
-| 服务器监控 | 资源/分片拓扑（`/api/monitor`） | `app/admin/http/controllers/MonitorController.php` |
-| 数据库管理 | 表/字段/行查看 + SQL 查询（`/api/db/*`） | `app/admin/http/controllers/DbController.php` |
-| 媒体库 | 全局文件/图片/视频管理 + URL 解析（`/api/media/*`） | `app/admin/http/controllers/FileController.php` |
-| 文件上传 | 鉴权上传 + 下载（`/api/upload`） | `app/admin/http/controllers/UploadController.php` |
-| 通知中心 | 站内通知 + 广播（`/api/notifications/*`） | `app/admin/http/controllers/NotifyController.php` |
-| 仪表盘 | 汇总数据（`/api/dashboard/summary`） | `app/admin/http/controllers/DashboardController.php` |
+| 系统配置 | `.env` 不可变配置 + 运行时只读展示（`/api/system/configs`） | `app/admin/controllers/SystemController.php` |
+| 配置中心 | 运行时可变 KV 配置（`/api/configs`，DB 存储，支持分组/类型/写入） | `app/admin/controllers/ConfigController.php` |
+| 角色管理 | RBAC 角色 CRUD + 权限码授权（`/api/roles`） | `app/admin/controllers/RoleController.php` |
+| 菜单管理 | 动态路由 + 按钮级权限码（`/api/menus`） | `app/admin/controllers/MenuController.php` |
+| 用户管理 | 用户 CRUD + 角色分配 + 部门关联 | `app/admin/controllers/UserController.php` |
+| 部门管理 | 树形组织结构 | `app/admin/controllers/DeptController.php` |
+| 权限目录 | 授予面 = 菜单 auth_code ∪ 按钮码 ∪ 插件 `permissions()` 声明的操作码，唯一派生口 `app/support/PermCatalog`（`/api/perms/catalog` 与契约审计同源读它） | `app/support/PermCatalog.php` |
+| 插件管理 | 安装/卸载/升级/暂停 + 市场（`/api/plugins`） | `app/admin/controllers/PluginController.php` |
+| 操作审计 | 谁/方法/路径/状态/耗时/IP 元数据（禁止记请求体） | `app/admin/controllers/AuditController.php` |
+| 系统日志 | 框架级日志查看/清理（`/api/syslogs`） | `app/admin/controllers/SyslogController.php` |
+| 定时任务 | 任务调度 + 手动触发（`/api/schedules`） | `app/admin/controllers/ScheduleController.php` |
+| 服务器监控 | 资源/分片拓扑（`/api/monitor`） | `app/admin/controllers/MonitorController.php` |
+| 数据库管理 | 表/字段/行查看 + SQL 查询（`/api/db/*`） | `app/admin/controllers/DbController.php` |
+| 媒体库 | 全局文件/图片/视频管理 + URL 解析（`/api/media/*`） | `app/admin/controllers/FileController.php` |
+| 文件上传 | 鉴权上传 + 下载（`/api/upload`） | `app/admin/controllers/UploadController.php` |
+| 通知中心 | 站内通知 + 广播（`/api/notifications/*`） | `app/admin/controllers/NotifyController.php` |
+| 仪表盘 | 汇总数据（`/api/dashboard/summary`） | `app/admin/controllers/DashboardController.php` |
 
 **判断标准**：如果"所有业务都需要它"或"它涉及框架级机制"（鉴权/路由/插件加载/审计），就做在核心。
 
@@ -76,7 +76,7 @@
 
 - **定位**：完整的业务闭环（数据模型 + 业务规则 + UI 页面 + 权限）
 - **特征**：有独立的用户旅程，可组合多个组件插件
-- **约束**：表名前缀 `plug_<name>_`，路由前缀 `/api/<name>/`，菜单通过 `menus()` 声明
+- **约束**：表名沿用全局 `kode_` 前缀并带插件自己的名字段（如 `kode_cms_articles`；跨插件、跨核心都不得撞名——`tables()` 同时是 `uninstall(purge)` 的 DROP 清单），路由前缀 `/api/<name>/`，菜单通过 `menus()` 声明
 - **示例**：
 
 | 业务 | 使用的组件 | 核心数据表 |
@@ -325,45 +325,71 @@ CREATE TABLE kode_configs (
 
 ### 7.2 当前实现
 
-后端 `StorageController` 已实现本地/USB/NAS/LAN-NAS 四类存储管理。
+盘的登记与 CRUD 是**核心职责**，表是 `kode_storage_configs`（`database/sql/schema.sql`，
+迁移 `2026_09_08_000028` 建表并 seed 一条 `local` 默认盘），管理页为菜单「存储配置」`/storage`，
+接口为 `StorageController`（`/api/storage*`）。`store()` 只接受 `DriverRegistry::allowed()`
+里的驱动键——即**已启用插件 `drivers()` 声明的键**，核心自己不认驱动名。
 
-### 7.3 对象存储插件设计
+历史文档在这里写过「本地/USB/NAS/LAN-NAS 四类」：代码里一张 USB/NAS 表、一个驱动键都没有，
+别照抄（§3.6 的 URL 转换也只分「local 盘」与「远程盘」两类）。
+
+### 7.3 对象存储插件分工
+
+已落地形态是**两个插件分工**（不存在单个 `StoragePlugin.php`，插件也不带 `config/` 与
+`migrations/` 目录——配置走 `configSchema()`，建表走 `install()`）：
 
 ```
-plugins/StoragePlugin.php
-├── config/
-│   └── storage.php        # 各平台配置（ak/sk/bucket/region/endpoint）
-├── services/
-│   ├── StorageService.php # 统一接口：upload/download/delete/list
-│   └── adapters/
-│       ├── AliyunOssAdapter.php
-│       ├── TencentCosAdapter.php
-│       ├── QiniuAdapter.php
-│       ├── MinioAdapter.php
-│       └── LocalAdapter.php   # 本地存储（降级）
-├── migrations/
-│   └── 001_create_storage_drivers.php
-└── tables
-    └── plug_storage_driver  # 存储驱动表（ak/sk/bucket/region/status）
+plugins/StorageDriverPlugin.php        # 契约示范 + local 兜底监听者
+└── 监听 storage_driver_resolve，driver=local 直接回执 pushed=true（本地盘无需上传）
+
+plugins/FlysystemStoragePlugin.php     # 纯组件：远程驱动实现（无自己的表）
+└── 同一事件的另一个监听者：用 league/flysystem-aws-s3-v3 统一实现
+    s3 / oss / cos / minio（endpoint 指向各家服务；未实现的驱动如实回 pushed=false）
 ```
 
-**接口约定**：
+两个插件都**不建配置表**：`drivers()` 只申报键名（`DriverRegistry` 据此放行 `store()`），
+真正的桶/密钥存在核心的 `kode_storage_configs.config`（JSON 一列，`ak`/`sk` 标了 secret，
+出参恒脱敏，见 `tests/StorageConfigMaskTest.php`）。
+
+> `StorageDriverPlugin::tables()` 里那张 `kode_storage_drivers`（driver/endpoint/bucket/prefix/ak/sk/enabled）
+> 目前**全仓无一处读写**——它是契约示范留下的骨架表，不是运行时配置源。要么接上用它，
+> 要么删掉声明；挂着一张带 ak/sk 列却没人管的表，只多一个凭证落点。
+
+**驱动契约不是 PHP 接口，而是一个事件**（历史上这里画过一个 `StorageInterface`，代码里从未存在）：
+
 ```php
-interface StorageInterface {
-    public function upload(string $localPath, string $remoteKey): array;
-    public function download(string $remoteKey, string $localPath): void;
-    public function delete(string $remoteKey): void;
-    public function getUrl(string $remoteKey, ?int $expires = null): string;
-    public function exists(string $remoteKey): bool;
-    public function list(string $prefix = ''): array;
-}
+// 核心 StorageManager::pushRemote() 派发（常量 StorageManager::REMOTE_RESOLVE_EVENT）
+Event::dispatch('storage_driver_resolve', [
+    'driver' => 's3',            // kode_storage_configs.driver
+    'path'   => '/abs/local/file.jpg',
+    'key'    => 'media/2026/09/file.jpg',
+    'disk'   => ['id' => 7, 'driver' => 's3', 'endpoint' => …, 'bucket' => …, 'ak' => …, 'sk' => …, 'prefix' => …],
+    'id'     => 42,              // 媒体 id（与 disk.id 不同义）
+]);
+// 监听者用 $event->set() 回报：pushed(bool) / url(string) / msg(string)
+// 读入参必须用 $event->get()：框架 Kode\Event\Event 没有 __get，写 $event->driver 恒得 null。
 ```
 
-**推荐 Composer 包**：
-- `league/flysystem`（统一文件系统抽象层）
-- `league/flysystem-aws-s3-v3`（阿里/MinIO S3 兼容）
-- `league/flysystem-qiniu-cloud-storage`（七牛）
-- `league/flysystem-azure-blob-storage`（Azure）
+**四个入参的口径由核心单方面保证，驱动一律不许自己算**：
+
+| 键 | 形状 | 由谁保证 |
+| --- | --- | --- |
+| `path` | **绝对**本地路径，可直接 `is_file`/`read` | `StorageManager::localPath()`——守护进程 CWD 实测是 `/`，传 `uploads/…` 相对串等于让驱动按 CWD 猜，永远「源文件不存在」 |
+| `key` | **完整**远程对象键，`prefix` 已含且只出现一次 | `StorageManager::remoteObjectKey()`——写侧与展示侧同源，否则「transfer 成功、前端点开的 URL 指向从不存在过的对象」 |
+| `disk` | **平铺**形态（`flattenDisk()` 摊掉嵌套 `config`） | 唯一派发点进门先摊平，调用方（含 `StorageController::test()`）一律传 `disk()` 原样 |
+| `id` | 媒体 id | 与 `disk.id`（盘 id）不同名不同义 |
+
+驱动侧只剩一句「把这个文件写到这个键」，回报 url 用 `StorageManager::remoteObjectUrl($disk, $key)`。
+形状与同源性的回归见 `tests/StorageRemotePushTest.php`（+ `tests/StorageDriverPayloadTest.php` 守平铺形态）。
+
+> 事件契约里**没有删除动词**：`StorageController::test()` 的连通性探针会往桶里落一个
+> `kode-probe/{临时文件名}` 且不清理。要么在契约里补 `storage_driver_delete`，要么由桶生命周期规则兜掉
+> 这个前缀——别指望应用侧能删（它没有驱动句柄）。
+
+**已用的 Composer 包**：`league/flysystem` + `league/flysystem-aws-s3-v3`（S3 协议通吃
+AWS / OSS / COS / MinIO / R2，靠 endpoint 分流）。七牛、Azure 这类非 S3 协议的
+需另装对应适配器（`league/flysystem-qiniu-cloud-storage` 等），**装之前先在插件 `drivers()` 里申报键名**，
+否则核心不会允许建那种盘的配置行。
 
 ---
 
@@ -373,68 +399,70 @@ interface StorageInterface {
 
 - 不是所有业务都需要钱包（CMS 不需要，商城需要）
 - 钱包有多种形态（余额/积分/权益/虚拟币），不同业务用不同钱包类型
+  —— **尚未落地**：当前实现是「每 (member, tenant) 一个账户」，多种形态只体现在流水的 `type` 上
 - 钱包需要独立的财务流水、对账、审计
 
-### 8.2 数据模型
+### 8.2 数据模型（对照 `plugins/WalletPlugin.php` 的 `install()`；省略 `IF NOT EXISTS` 与其余两个索引）
 
 ```sql
--- 钱包账户（每个用户可有多类钱包）
-CREATE TABLE plug_wallet_account (
+-- 钱包账户：一个会员在一个租户下一个账户（惰性开户 / 批量开户）
+CREATE TABLE kode_wallets (
     id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT NOT NULL,
-    type        VARCHAR(32) NOT NULL DEFAULT 'balance',  -- balance/integral/point/virtual
-    balance     DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-    frozen      DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-    total_in    DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-    total_out   DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    member_id   BIGINT NOT NULL,
+    tenant_id   BIGINT NOT NULL DEFAULT 0,
+    balance     NUMERIC(18,4) NOT NULL DEFAULT 0,
+    frozen      NUMERIC(18,4) NOT NULL DEFAULT 0,
+    currency    VARCHAR(8)  NOT NULL DEFAULT 'CNY',
+    status      SMALLINT NOT NULL DEFAULT 1,
+    note        TEXT NOT NULL DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(user_id, type)
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX uk_wallets_member_tenant ON kode_wallets (member_id, tenant_id);
 
--- 钱包流水（只追加，不可修改）
-CREATE TABLE plug_wallet_ledger (
-    id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT NOT NULL,
-    account_id  BIGINT NOT NULL,
-    type        VARCHAR(32) NOT NULL,       -- balance/integral
-    direction   VARCHAR(4) NOT NULL,        -- in/out
-    amount      DECIMAL(12,2) NOT NULL,     -- 正数
-    balance     DECIMAL(12,2) NOT NULL,     -- 变动后余额
-    biz_type    VARCHAR(32) NOT NULL,       -- recharge/consume/transfer/refund
-    biz_id      VARCHAR(64) NOT NULL,       -- 业务单据号
-    remark      VARCHAR(255) DEFAULT '',
-    operator_id BIGINT DEFAULT NULL,        -- 操作人（admin 操作时填）
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- 钱包流水（只追加，不可修改；账本先行，余额变化必留 before/after）
+CREATE TABLE kode_wallet_ledgers (
+    id                     BIGSERIAL PRIMARY KEY,
+    wallet_id              BIGINT NOT NULL,
+    member_id              BIGINT NOT NULL,
+    tenant_id              BIGINT NOT NULL DEFAULT 0,
+    type                   VARCHAR(24) NOT NULL,      -- created/credit/debit/freeze/unfreeze/adjust/transfer_in/transfer_out/refund
+    amount                 NUMERIC(18,4) NOT NULL,
+    before_balance         NUMERIC(18,4) NOT NULL DEFAULT 0,
+    after_balance          NUMERIC(18,4) NOT NULL DEFAULT 0,
+    reason                 VARCHAR(255) NOT NULL DEFAULT '',
+    operator               VARCHAR(64) NOT NULL DEFAULT '',
+    counterparty_wallet_id BIGINT NULL,               -- 转账对手方
+    meta                   JSONB NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_ledger_user ON plug_wallet_ledger(user_id, type, direction);
-CREATE INDEX idx_ledger_biz ON plug_wallet_ledger(biz_type, biz_id);
+CREATE INDEX idx_ledgers_wallet ON kode_wallet_ledgers (wallet_id, created_at DESC);
+CREATE INDEX idx_ledgers_member ON kode_wallet_ledgers (member_id, created_at DESC);
 ```
 
 ### 8.3 对外接口
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/wallet/accounts/{userId}` | 获取用户所有钱包账户 |
-| GET | `/api/wallet/ledgers` | 分页流水（`?user_id=&type=&direction=&page=`） |
-| POST | `/api/wallet/recharge` | 充值 `{user_id, type, amount, biz_id}` |
-| POST | `/api/wallet/consume` | 消费 `{user_id, type, amount, biz_type, biz_id, remark}` |
-| POST | `/api/wallet/transfer` | 转账 `{from_user, to_user, type, amount}` |
-| POST | `/api/wallet/freeze` | 冻结 `{user_id, type, amount}` |
-| POST | `/api/wallet/unfreeze` | 解冻 `{user_id, type, amount}` |
+| 方法 | 路径 | 权限码 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/wallet/members` | `wallet:view` | 分页账户列表 |
+| GET | `/api/wallet/members/{member_id}` | `wallet:view` | 单会员账户（`member_id` 为 HashId 不透明串） |
+| GET | `/api/wallet/members/{member_id}/ledger` | `wallet:view` | 分页流水 |
+| GET | `/api/wallet/stats` | `wallet:view` | 余额/冻结汇总 |
+| GET | `/api/wallet/recent` | `wallet:view` | 最近流水 |
+| GET | `/api/wallet/export` | `wallet:export` | 导出（单独权限码，导出含 PII） |
+| POST | `/api/wallet/batch-open` | `wallet:create` | 批量开户 |
+| POST | `/api/wallet/adjust` | `wallet:adjust` | 调整 `{member_id, amount, reason}`（amount 可负） |
+| POST | `/api/wallet/transfer` | `wallet:transfer` | 转账 `{from_member_id, to_member_id, amount, reason}` |
 
 ### 8.4 业务集成方式
 
 ```php
-// 商城插件下单成功后调用钱包组件
-$wallet = resolve(PluginManager::class)->get('wallet');
-$wallet->consume([
-    'user_id'  => $orderId->userId,
-    'type'     => 'balance',
-    'amount'   => $orderTotal,
+// 跨插件调服务：走对方 register() 里 bind 的容器 id（没有 PluginManager::get()）
+// 写入一律走账本方法，余额与流水在同一事务里落，不要在调用方拼 SQL。
+$wallet = resolve('wallet.service');
+$wallet->debit($memberId, $orderTotal, "订单 {$orderHashId} 支付", 'shop', [
     'biz_type' => 'order_pay',
-    'biz_id'   => $orderId->hashId,
-    'remark'   => "订单 {$orderId->hashId} 支付",
+    'biz_id'   => $orderHashId,
 ]);
 ```
 
@@ -464,7 +492,8 @@ plugins/<name>/                   # 插件私有目录（namespace Kode\Plugins\
 **组件插件约定**：
 - 不声明 `menus()`（除非有配置页）、不注册前端路由
 - 通过 `bind()` 暴露 Service + 事件总线对外
-- 表名建议带插件前缀避免撞名（如 `plug_wallet_*`；示例公告插件用 `kode_notices`）
+- 表名一律用全局 `kode_` 前缀 + 插件自己的名字段避免撞名（`kode_wallets`、`kode_notices`、`kode_lowcode_*`）；
+  `tables()` 同时是 `uninstall(purge)` 的删表清单，撞名等于替别人删表（静态门禁见 `tests/PluginSchemaCoverageTest.php`）
 
 ### 9.2 业务插件骨架
 

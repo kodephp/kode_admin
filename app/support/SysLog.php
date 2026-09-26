@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace app\support;
 
 use Kode\Database\Db\Db;
-use Kode\Http\Request;
 
 /**
  * 系统日志打点（失败绝不影响主流程）。
@@ -18,9 +17,11 @@ final class SysLog
             Db::insert(
                 'INSERT INTO kode_system_logs (level, module, message, context, ip, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
                 [
-                    substr($level, 0, 16), substr($module, 0, 64), substr($message, 0, 500),
-                    substr((string) json_encode($context), 0, 8000),
-                    substr((string) (Request::ip() ?? ''), 0, 64),
+                    Clip::chars($level, 16), Clip::chars($module, 64), Clip::chars($message, 500),
+                    // context 是 TEXT（没有列宽要防），这一刀限的是体积：切在半个汉字上
+                    // 会让整条 INSERT 报 22021，而外面的 catch 把它吃成「日志没打出来」。
+                    Clip::chars((string) json_encode($context), 8000),
+                    Clip::chars(ClientIp::resolve(), 64),
                 ]
             );
         } catch (\Throwable) {

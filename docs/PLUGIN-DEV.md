@@ -145,6 +145,22 @@ interface PluginInterface
 > 声明了却不调用注册方法，任务永远不会执行——审计会把它判为 **drift**（阻断），
 > 而不是静默通过。见 §4.6.1。
 
+### 4.1.1 `describe()` 返回结构关键字段（前端必知）
+
+`PluginContract::describe()` 返回的 JSON 结构有几个字段**不是数组**，前端消费时极易出错：
+
+| 字段 | PHP 类型 | JSON 类型 | 前端消费方式 |
+|---|---|---|---|
+| `groups` | `array<group, list<string>>` | **对象** `{ group: [cap, ...] }` | `Object.keys(p.groups)` |
+| `events` | `array<event, list<string>>` | **对象** `{ event: [listener, ...] }` | `Object.keys(p.events)` |
+| `config_schema` | `array<string, mixed>` | 对象（嵌套） | 按 schema 结构遍历 |
+| `meta` | `array<string, mixed>` | 对象 | 按 key 取值 |
+| `dependencies[].ok` | `bool` | boolean | 字段名是 `ok`，不是 `ready` |
+
+其余字段（`tables`, `menus`, `commands`, `crons`, `capabilities`, `permissions`, `drivers`, `requires`）均为数组。
+
+> 📖 **前端开发完整指南**：见 `docs/PLUGIN-FRONTEND.md`，含所有 API 返回结构、字段类型、常见陷阱与正确写法。
+
 ### 4.6.1 `crons()` 兑现契约（框架 v1.4.0 起有消费方）
 
 框架 **v1.4.0** 给 `PluginManager` 补上了 `addCron()`，`crons()` 从「无人消费的元数据」
@@ -489,10 +505,10 @@ A→B→A 只返回 `['B']`，不无限递归）。**反向依赖者**：`depend
 
 `permissions()` 声明的权限码进入权限目录供角色勾选，但路由只挂 `AuthMiddleware`
 （登录门禁）时权限码从未在运行时校验——任何已登录用户都能调 delete/update，
-属声明⟺实现漂移。`app/admin/http/middleware/RequirePerm.php` 补齐消费端：
+属声明⟺实现漂移。`app/admin/middleware/RequirePerm.php` 补齐消费端：
 
 ```php
-use app\admin\http\middleware\RequirePerm;
+use app\admin\middleware\RequirePerm;
 
 // 用法：->middleware([new AuthMiddleware(), new RequirePerm('notices:delete')])
 $manager->addRoute('notice.destroy', 'DELETE', '/api/notices/{id}', [$ctrl, 'destroy'])
@@ -590,6 +606,21 @@ public function menus(): array
 `install()`/`uninstall($purge)` 的删表保护正则前置条件——声明阶段就把非法名挡住，
 避免审计之外的地方拼出会被静默拒绝的 SQL。
 
+`tables()` 还是**三对口径的交点**：本插件 SQL 引用的每张表、`install()` 里
+`CREATE TABLE` 的每张表、`tables()` 声明的每张表，必须两两相等。任一边漂移都无声：
+
+- **建了没声明** —— `uninstall($purge)` 删不掉、备份导出与 `pg_dump` 提示抓不到，表变孤儿；
+- **查了没人建** —— 全新环境装完插件，第一次读就是 `relation does not exist` 500；
+  开发库因有人手工建过而永远复现不出来；
+- **声明了没人建** —— purge 会 `DROP` 一张不属于本插件的表。
+
+静态门禁见 `tests/PluginSchemaCoverageTest.php`（纯解析插件源码，不连库）：
+把每条 SQL 的 `FROM/JOIN/INTO/UPDATE kode_*` 与 `CREATE TABLE kode_*` 和 `tables()`
+做双向差集。实测翻过车的正是第二种——frontend 插件 5 张 workflow 运维表
+（budgets/alerts/alert_rules/sla_targets/step_regressions）被几十条路由读写，
+`install()` 却只建到 `webhook_logs`。新增表时三处一起改：`install()` 建表 + `tables()`
+声明 + `upgrade()` 用幂等 `install()` 把缺表回填给历史环境。
+
 `parent` 由后端 `MenuController::tree()` 直接挂接（指向已存在的一级目录 path），
 前端不再需要自己做目录收纳；无 `parent` 的插件叶子前端统一收进「扩展」目录。
 
@@ -598,8 +629,13 @@ public function menus(): array
 
 ## 6. 完整示例 A：组件插件（无页面、无菜单）
 
-原型：`plugins/DemoPlugin.php` + `plugins/DemoService.php`。
+原型：`plugins/DemoPlugin.php` + `plugins/demo/DemoService.php`。
 适用场景：钱包、支付、短信、对象存储等**被其它插件调用**的底座能力。
+
+> 目录铁律：主类在 `plugins/XxxPlugin.php`，其余一切文件放 `plugins/<name>/`（名 = `name()` 返回值）。
+> 插件文件浏览器、备份/恢复、打包与市场安装都按这一条枚举「这个插件的文件」——
+> 把兄弟类放在 `plugins/` 根级（或另起一个不同名的目录），备份就会少抓文件，
+> 恢复出来是「半套文件 + 状态已启用」，下次启动直接 fatal。
 
 ### 6.1 主类
 
@@ -612,6 +648,7 @@ namespace Kode\Plugins;
 
 use Kode\Framework\Plugin\PluginInterface;
 use Kode\Framework\Plugin\PluginManager;
+use Kode\Plugins\demo\DemoService;
 
 final class DemoPlugin implements PluginInterface
 {
@@ -781,21 +818,29 @@ declare(strict_types=1);
 namespace Kode\Plugins\notices;
 
 use Kode\Framework\Http\Controller;
-use app\http\concerns\ApiResponse;
+use app\concerns\ApiResponse;
+use app\concerns\PageWindow;
 use app\support\HashId;
 use Kode\Database\Db\Db;
 
 final class NoticeController extends Controller
 {
     use ApiResponse;
+    use PageWindow;
 
     public function index()
     {
-        $page = max(1, (int) $this->query('page', 1));
-        $size = min(100, max(1, (int) $this->query('size', 20)));
+        // 分页窗口只由 pageWindow() 判一次：size 夹到上限是保护，page 翻进行深上限之外直接 400。
+        // 自己写 `max(1, (int) query('page', 1))` 只挡下限，乘上 size 会溢出成 float 打成 500。
+        $win = $this->pageWindow($this->query('page'), $this->query('size'));
+        if ($win['error'] !== null) {
+            return $this->fail($win['error'], 400);
+        }
+        [$page, $size, $offset] = [$win['page'], $win['size'], $win['offset']];
+
         $rows = Db::select(
             'SELECT id, title, body, status, created_at FROM kode_notices ORDER BY id DESC LIMIT ? OFFSET ?',
-            [$size, ($page - 1) * $size]
+            [$size, $offset]
         );
         foreach ($rows as &$row) {
             $row['id'] = HashId::enc((int) $row['id']);   // 对外 ID 一律 HashId
@@ -821,6 +866,11 @@ final class NoticeController extends Controller
 }
 ```
 
+> **分页窗口只判一次**：`pageWindow()` 出 `{page,size,offset,error}`，`offset` 只由它算。
+> 如果这个列表是**归并型分页**（开了分片、每片各取 `page*size` 行进 PHP 再排序切片），
+> 改用 `mergedWindow($page, $size, $shards)` —— 它的预算限的是 PHP 存下的行数，
+> 默认行深上限限的是 DB 扫弃的行数，两者不是一回事。详见 `AGENTS.md` §4。
+
 > **写操作门禁**：业务插件的写接口在控制器内判断超管（见 NoticeController 的
 > `isAdmin()`），读接口仅挂 `AuthMiddleware` 即可。
 
@@ -828,7 +878,7 @@ final class NoticeController extends Controller
 
 ## 8. 运行时门禁：启停即时生效、无需重启
 
-- `app/http/middleware/PluginGateMiddleware.php` 挂在全局最外层（`app/bootstrap.php`）；
+- `app/middleware/PluginGateMiddleware.php` 挂在全局最外层（`app/bootstrap.php`）；
   命中 `/api/<name>/*` 且该插件状态非 `enabled` 时**直接 404**，不消耗鉴权/业务资源。
 - 状态存 `kode_plugins` 表 + redis `HotCache`（300s）。
 - 三态：`enabled`（放行）/ `paused`（404「插件已暂停」）/ `uninstalled`（404「插件未安装」）。
@@ -849,7 +899,9 @@ final class NoticeController extends Controller
 | POST | `/api/plugins/{name}/uninstall` | `{confirm:1, purge?}`；purge 时删表 + **清配置** |
 | POST | `/api/plugins/{name}/pause` | 置 paused（即时 404）+ **级联暂停下游依赖者** |
 | POST | `/api/plugins/{name}/resume` | 置 enabled；**依赖未就绪拒绝** |
-| POST | `/api/plugins/{name}/upgrade` | 版本比较后调 `upgrade($from,$to)`；**依赖未就绪拒绝** |
+| POST | `/api/plugins/{name}/upgrade` | 版本比较后调 `upgrade($from,$to)`；**依赖未就绪拒绝**；**未登记（没装过）拒绝** |
+| GET | `/api/plugins/{name}/version-history` | 版本账本（install/upgrade/rollback/uninstall 逐条留痕，最新在前） |
+| POST | `/api/plugins/{name}/rollback` | `{target}` 把**登记版本**回退到账本里出现过的某个值；目标没登记过即 400 并回 `candidates`。**只改版本登记，不换代码**（换代码走备份恢复） |
 | GET | `/api/plugins/{name}/package` | 打包 zip（含 `plugin.json` 清单，随包携带 `contract`） |
 | POST | `/api/plugins/install-remote` | `{url, sha256, name}` 远程安装（sha256 + **清单三道门禁** + 20MB 上限，装完需 reload） |
 

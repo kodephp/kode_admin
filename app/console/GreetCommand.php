@@ -8,7 +8,7 @@ use Kode\Console\Attribute\AsCommand;
 use Kode\Framework\Console\Command;
 
 /**
- * 示例命令：php bin/console greet Kode --shout
+ * 示例命令：php kode greet Kode --shout
  */
 #[AsCommand(name: 'greet', description: '向指定的人打招呼', usage: 'greet {name?} {--shout:bool}')]
 final class GreetCommand extends Command
