@@ -14,6 +14,8 @@ composer.lock
 .env
 .env.*
 !.env.example
+# LicenseService 运行时在这里生成低代码 license 的 RSA 私钥（0600），入库等于全站授权码作废
+/storage/keys/
 
 # ── 运行时目录（缓存 / 日志 / 会话，本地生成） ──
 /storage/cache/*
@@ -33,6 +35,8 @@ composer.lock
 # ── 运行时 worker 状态与上传产物 ──
 /storage/runtime/
 /storage/uploads/
+# 备份转储含密码哈希与业务数据，绝不入库
+/storage/backups/
 /storage/bench.sqlite
 /runtime/
 *.pid
@@ -106,6 +110,9 @@ $RECYCLE.BIN/
 # ── 助手私有记忆（非框架代码） ──
 /.workbuddy
 /.trae
+
+# ── 前端壳构建产物（uni3 H5 由 uni3 仓库 `pnpm build:h5` 生成后复制过来） ──
+/public/uni3-preview/
 
 # ── 本地测试（默认忽略，按需放开注释保留） ──
 # /tests
