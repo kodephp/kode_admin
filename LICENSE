@@ -24,7 +24,9 @@ SOFTWARE.
 
 第三方许可说明（Third-party notices）
 ------------------------------------
-本框架聚合了 kode 厂商生态组件与其他开源库，各自以原许可发布，框架本身采用 MIT。
-其中 `kode/jwt` 以 **Apache-2.0** 发布；其 LICENSE 文件随 Composer 安装在
-`vendor/kode/jwt/LICENSE`，重新分发时请一并保留。其余 kode 组件（如 kode/core）
-及 Monolog、Symfony Validator、Nyholm PSR-7 等多以 **MIT** 发布。
+本仓库聚合了 kode 生态组件与其他开源库，各自以原许可发布；本包采用 MIT。
+kode 组件多数以 **Apache-2.0** 发布（`kode/http`、`kode/process`、
+`kode/database`、`kode/fibers`、`kode/jwt` 等），少部分以 **MIT** 发布
+（`kode/core`、`kode/validation`、`kode/middleware` 等）；各包 LICENSE 随
+Composer 安装在 `vendor/kode/<包名>/LICENSE`，重新分发时请一并保留。
+Monolog、Symfony Validator、Nyholm PSR-7 等第三方库多以 **MIT** 发布。

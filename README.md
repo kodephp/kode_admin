@@ -29,3 +29,7 @@ php kode start
 
 - 管理 Web：`../admin-web`（vben-antd，Ant Design Vue + vxe-table；适配层 `src/api/kode.ts`）
 - C 端多端：uni-app x，调 `/c-api/*`（默认关闭自助注册，`C_API_REGISTER=true` 开启）
+
+## 许可证
+
+MIT License，详见 [LICENSE](LICENSE)。
